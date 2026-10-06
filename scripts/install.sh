@@ -15,7 +15,8 @@ scp_() { if [ -n "${ROBOT_PASSWORD:-}" ]; then sshpass -p "$ROBOT_PASSWORD" scp 
 
 echo "==> Copying files to $ROBOT"
 ssh_ "$ROBOT" "mkdir -p $DEST"
-scp_ "$HERE/src/look_straight.py" "$ROBOT:$DEST/look_straight.py"
+scp_ "$HERE"/src/*.py "$ROBOT:$DEST/"
+[ -d "$HERE/speech" ] && { ssh_ "$ROBOT" "mkdir -p $DEST/speech"; scp_ "$HERE"/speech/* "$ROBOT:$DEST/speech/"; }
 scp_ "$HERE/systemd/reachy-look.service" "$ROBOT:/tmp/reachy-look.service"
 
 echo "==> Installing and enabling the service"

@@ -60,6 +60,33 @@ Motors are disabled after every boot; the script enables them itself at start.
   follows when you move.
 - `HOLD_S`, `LOST_RECENTRE_S`: what it does when the face disappears.
 
+## AI companion (port of sankarlabs/reachy-ai-companion-demo)
+
+`scripts/run_companion.sh [--loop] [--only MODE] [--profile professional]` runs the
+companion on the robot (the face-centering service is paused meanwhile, then restarted;
+Ctrl+C stops it cleanly). Modes: greeting, face_tracking (Follow the Leader), simon_says,
+conversation, security, farewell. The original did not work on SDK >= 1.11 (it used
+`reachy_mini.head.look_at`, which no longer exists, and `cv2.VideoCapture(0)`); this port
+drives the head and camera through the same detector and smooth controller as the
+face-centering demo, so every move is smooth, and the antennas move with the gestures
+and while talking. Two things are kept as in the original: the "emotion detector" is a
+face-size heuristic, and "security mode" reacts to any face, not to motion.
+
+**Voice.** The robot has no speech engine, so each line is rendered on the laptop to
+`speech/*.wav` and played by the robot (head wobbles with the audio):
+
+```
+uv venv tts-venv && uv pip install --python tts-venv/bin/python kokoro-onnx soundfile
+# model files (~120 MB): kokoro-v1.0.int8.onnx + voices-v1.0.bin from
+# https://github.com/thewh1teagle/kokoro-onnx/releases (model-files-v1.0) into ~/reachy/kokoro
+tts-venv/bin/python scripts/make_speech.py --sample af_heart af_bella bf_emma   # compare
+tts-venv/bin/python scripts/make_speech.py --voice af_heart --force
+scripts/install.sh                                                              # copy to robot
+```
+
+`--engine espeak` is a no-model fallback (robotic). Speaker volume:
+`POST /api/volume/set {"volume": 100}` on the robot (it was 67).
+
 ## Troubleshooting
 
 - *Robot not found*: it is off (button released), or not on your network. Check the
