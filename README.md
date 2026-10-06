@@ -39,6 +39,9 @@ Reactions on top of the tracking (disable with `--no-reactions`): the antennas s
 while it tracks; when the person leaves (2 s) the ears droop (ears only), then it looks
 around slowly for ~9 s by turning its waist (the head follows, +/-65 deg), and the waist
 drifts back to centre afterwards; with nobody around it twitches an antenna now and then.
+Head tilt: it copies the head tilt (roll) of the person it is looking at, by keeping their eye line level in
+the image (2 deg dead zone, up to 22 deg; `--no-tilt` to disable). If the roll ever pushes the wrong way
+(saturated while the eye line is still >15 deg off) it flips its own sign and logs it.
 Timings are constants at the top of `src/look_straight.py`; the gestures live in `src/gestures.py`.
 
 Live view and tracking state: <http://reachy-mini.local:8080> (camera with the centre

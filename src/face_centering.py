@@ -62,6 +62,10 @@ BODY_OMEGA = 1.5  # waist spring (rad/s): slow and gentle
 BODY_MAX_SPEED = math.radians(35)
 PITCH_LIMIT = math.radians(28)
 ROLL_LIMIT = math.radians(25)
+TILT_DEADZONE = math.radians(2.0)  # ignore eye-line tilts below this (landmark noise)
+TILT_MAX = math.radians(22)  # copy the person's head tilt up to this
+TILT_GAIN = 1.0  # 1 = apply the same tilt
+TILT_RUNAWAY = math.radians(15)  # still this tilted in the image while saturated -> wrong sign
 ANTENNA_TAU = 0.06  # antenna smoothing (s)
 FILTER_MIN_CUTOFF = 0.6  # Hz, when the face is still (kills detector jitter)
 FILTER_BETA = 12.0  # cutoff rise per rad/s of face motion (keeps up when you move)
@@ -85,6 +89,7 @@ if(s.tracking)h+="eye-midpoint error  x "+f(s.err_x_avg,3)+"  y "+f(s.err_y_avg,
 "   (0 = centred, goal +/-"+s.tolerance+")  "+(s.within_tol?"<b style='color:#4f4'>CENTRED</b>":"<b style='color:#fc4'>correcting</b>")+"\\n";
 h+="it still wants to turn  yaw "+f(s.goal_err_yaw_deg,2)+"deg  pitch "+f(s.goal_err_pitch_deg,2)+"deg\\n"+
 "head command            yaw "+f(s.cmd_yaw_deg)+"deg  pitch "+f(s.cmd_pitch_deg)+"deg  roll "+f(s.cmd_roll_deg)+"deg  waist "+f(s.cmd_body_deg)+"deg   speed "+s.speed_deg_s.toFixed(1)+" deg/s"+(s.still?"  (still)":"");
+if(s.tracking)h+="\\nperson's head tilt    "+f(s.tilt_deg)+"deg (copied)";
 document.getElementById("s").innerHTML=h;
 }catch(e){}
 setTimeout(tick,150)}tick();
@@ -183,6 +188,8 @@ class Rig:
         self._jpeg: bytes | None = None
         self._det: dict = {"seq": 0}  # newest detection
         self.det_log: list | None = None  # filled during calibration
+        self.follow_tilt = True  # copy the tracked person's head tilt (roll)
+        self.roll_k = -1.0  # d(eye-line angle in image)/d(head roll): -1 by geometry; auto-flipped if wrong
         self._tracking = False
         self._track_edge = False
         self._goal = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "omega": OMEGA,
@@ -199,7 +206,7 @@ class Rig:
             "err_x": 0.0, "err_y": 0.0, "err_x_avg": 0.0, "err_y_avg": 0.0,
             "err_rms": 0.0, "within_tol": False, "tolerance": TOLERANCE,
             "goal_err_yaw_deg": 0.0, "goal_err_pitch_deg": 0.0,
-            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0,
+            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0, "tilt_deg": 0.0,
             "speed_deg_s": 0.0, "still": False,
         }
 
@@ -395,7 +402,11 @@ class Rig:
                 eye = (prev[0] / scale, prev[1] / scale)  # full-resolution pixels
                 seq += 1
                 area = face.bbox[2] * face.bbox[3] / (size[0] * size[1])
-                rec = {"seq": seq, "t_arr": t_arr, "u": eye[0], "v": eye[1], "area_frac": area}
+                # Tilt of the line between the eyes in the image (+ = right eye lower).
+                (x1, y1), (x2, y2) = sorted((face.left_eye, face.right_eye))
+                eye_roll = math.atan2(y2 - y1, x2 - x1)
+                rec = {"seq": seq, "t_arr": t_arr, "u": eye[0], "v": eye[1], "area_frac": area,
+                       "eye_roll": eye_roll}
                 with self.lock:
                     self._det = rec
                     if self.det_log is not None:
@@ -442,6 +453,8 @@ class Rig:
         vbody = 0.0
         f_yaw = OneEuro(FILTER_MIN_CUTOFF, FILTER_BETA)
         f_pitch = OneEuro(FILTER_MIN_CUTOFF, FILTER_BETA)
+        f_roll = OneEuro(0.4, 4.0)  # tilt: steady when still
+        goal_roll, psi_avg, sat_since = 0.0, 0.0, None
         avg_x = avg_y = 0.0
         recent: collections.deque = collections.deque(maxlen=20)
         last_seq, last_seen = 0, 0.0
@@ -471,6 +484,7 @@ class Rig:
                 goal_yaw, goal_pitch = gs_yaw, gs_pitch
                 f_yaw.reset()
                 f_pitch.reset()
+                f_roll.reset()
                 last_seen = now
 
             if det.get("seq", 0) != last_seq and now - det["t_arr"] < 1.0:
@@ -478,14 +492,22 @@ class Rig:
                 if now - last_seen > 1.0:  # face (re)appeared: drop stale filter state
                     f_yaw.reset()
                     f_pitch.reset()
+                    f_roll.reset()
                 last_seen = now
                 # Face direction = head pose when the frame was taken + the angle
                 # that brings the eye midpoint to the image centre.
-                _, f_p, f_y = euler(hist.at(det["t_arr"] - latency))
+                f_r, f_p, f_y = euler(hist.at(det["t_arr"] - latency))
                 g_yaw = f_y + (cx - det["u"]) / px_yaw
                 g_pitch = f_p + (cy - det["v"]) / px_pitch
                 goal_yaw = float(np.clip(f_yaw(g_yaw, det["t_arr"]), -YAW_LIMIT, YAW_LIMIT))
                 goal_pitch = float(np.clip(f_pitch(g_pitch, det["t_arr"]), -PITCH_LIMIT, PITCH_LIMIT))
+                # Head tilt: roll that makes the eye line level in the image (= the
+                # person's tilt, copied), from the roll the head had at that frame.
+                psi = det["eye_roll"]
+                psi_avg += 0.3 * (psi - psi_avg)
+                psi_d = math.copysign(max(0.0, abs(psi) - TILT_DEADZONE), psi)
+                raw = f_r - TILT_GAIN * psi_d / self.roll_k
+                goal_roll = float(np.clip(f_roll(raw, det["t_arr"]), -TILT_MAX, TILT_MAX))
                 nx, ny = (det["u"] - cx) / cx, (det["v"] - cy) / cy
                 avg_x += 0.35 * (nx - avg_x)
                 avg_y += 0.35 * (ny - avg_y)
@@ -503,7 +525,18 @@ class Rig:
                     target_yaw = target_pitch = 0.0
                 else:
                     target_yaw, target_pitch = gs_yaw, gs_pitch  # hold
-                target_roll = 0.0
+                target_roll = goal_roll if (face_here and self.follow_tilt) else 0.0
+                # Sign guard: saturated at the limit yet the eye line is still far from level
+                # means the roll is pushing the wrong way; flip the sign.
+                if face_here and abs(goal_roll) > 0.95 * TILT_MAX and abs(psi_avg) > TILT_RUNAWAY:
+                    sat_since = sat_since or now
+                    if now - sat_since > 2.0:
+                        self.roll_k = -self.roll_k
+                        f_roll.reset()
+                        sat_since = None
+                        print(f"Tilt sign flipped (roll_k={self.roll_k:+.0f})", flush=True)
+                else:
+                    sat_since = None
                 omega, tau, vmax = OMEGA, GOAL_TAU, MAX_SPEED
             else:
                 target_yaw, target_pitch, target_roll = sg["yaw"], sg["pitch"], sg["roll"]
@@ -568,6 +601,7 @@ class Rig:
                     goal_err_pitch_deg=math.degrees(err_pitch),
                     cmd_yaw_deg=math.degrees(yaw), cmd_pitch_deg=math.degrees(pitch),
                     cmd_roll_deg=math.degrees(roll), cmd_body_deg=math.degrees(m_body),
+                    tilt_deg=math.degrees(goal_roll) if face_here else 0.0,
                     speed_deg_s=math.degrees(spd), still=bool(speed < STILL_SPEED),
                 )
 

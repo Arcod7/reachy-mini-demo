@@ -14,7 +14,8 @@ On top of the tracking, small reactions (disable with --no-reactions):
   * they leave (2 s without a face)    -> ears droop (ears only), then it looks around
                                           slowly with its waist for ~9 s, then idles
   * nobody around                      -> an occasional curious antenna twitch
-While it is tracking the antennas stay still.
+While it is tracking the antennas stay still, and the head copies the person's head
+tilt (roll): the eye line is kept level in the camera image (--no-tilt to disable).
 
 Live view + state: http://<robot>:8080
 
@@ -78,7 +79,7 @@ def presence_loop(rig: Rig) -> None:
         time.sleep(0.1)
 
 
-def main(do_calibrate: bool, reactions: bool) -> None:
+def main(do_calibrate: bool, reactions: bool, tilt: bool) -> None:
     signal.signal(signal.SIGTERM, _raise_interrupt)
     with ReachyMini() as mini:
         mini.stop_head_tracking()  # make sure the daemon's own tracker isn't steering
@@ -86,6 +87,7 @@ def main(do_calibrate: bool, reactions: bool) -> None:
         mini.wake_up()
         mini.goto_target(antennas=INIT_ANTENNAS_JOINT_POSITIONS, body_yaw=None, duration=0.5)
         rig = Rig(mini)
+        rig.follow_tilt = tilt
         rig.start(controller=not do_calibrate)
         try:
             time.sleep(1.0)
@@ -111,5 +113,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--calibrate", action="store_true", help="fit camera latency + px/deg, then exit")
     parser.add_argument("--no-reactions", action="store_true", help="plain eye contact, no gestures")
+    parser.add_argument("--no-tilt", action="store_true", help="do not copy the person's head tilt")
     args = parser.parse_args()
-    main(args.calibrate, not args.no_reactions)
+    main(args.calibrate, not args.no_reactions, not args.no_tilt)
