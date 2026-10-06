@@ -11,8 +11,6 @@ Pipeline (all on the robot, see face_centering.py):
       -> set_target @ 50 Hz
 
 On top of the tracking, small reactions (disable with --no-reactions):
-  * someone shows up after being away  -> excited head wiggle + antenna flaps,
-                                          then calm, still-eared eye contact
   * they leave (2 s without a face)    -> antennas droop and the head dips, then it
                                           looks around slowly for ~9 s, then idles
   * nobody around                      -> an occasional curious antenna twitch
@@ -36,8 +34,6 @@ from reachy_mini.reachy_mini import INIT_ANTENNAS_JOINT_POSITIONS
 from face_centering import PORT, Rig, calibrate, park
 from gestures import Gestures
 
-ARRIVE_MIN_ABSENCE_S = 4.0  # away at least this long -> it is an arrival, not a flicker
-ARRIVE_COOLDOWN_S = 20.0  # never replay the arrival gesture more often than this
 PRESENT_S = 0.5  # a face must stay this long before we react
 LOST_AFTER_S = 2.0  # no face for this long -> the person left
 IDLE_TWITCH_S = (20.0, 40.0)  # nobody around: twitch an antenna every so often
@@ -48,24 +44,19 @@ def _raise_interrupt(signum, frame) -> None:
 
 
 def presence_loop(rig: Rig) -> None:
-    """React to people arriving and leaving; the head itself is driven by the Rig."""
+    """React to people leaving; the head itself is driven by the Rig."""
     g = Gestures(rig)
     state = "idle"  # idle (nobody) | tracking (someone here)
-    last_seen, first_seen, absent = -1e9, None, 1e9
-    last_gesture = -1e9
+    last_seen, first_seen = -1e9, None
     next_twitch = time.monotonic() + random.uniform(*IDLE_TWITCH_S)
     rig.set_tracking(True)
     while True:
         now = time.monotonic()
         if rig.face() is not None:
             if first_seen is None:
-                first_seen, absent = now, now - last_seen
+                first_seen = now
             last_seen = now
             if state != "tracking" and now - first_seen >= PRESENT_S:
-                if absent >= ARRIVE_MIN_ABSENCE_S and now - last_gesture > ARRIVE_COOLDOWN_S:
-                    print("Someone arrived: excitement!", flush=True)
-                    g.animate_excitement(toward_face=True)
-                    last_gesture = time.monotonic()
                 rig.set_tracking(True)  # calm eye contact, antennas still
                 state = "tracking"
         else:

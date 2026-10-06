@@ -35,9 +35,8 @@ your computer (the robot cannot join WPA-Enterprise networks; a phone hotspot wo
    it, then on the robot `/venvs/apps_venv/bin/python ~/reachy-mini-demo/look_straight.py --calibrate`
    (stop the service first). Results go to `~/camera_calibration.json`.
 
-Reactions on top of the tracking (disable with `--no-reactions`): when someone arrives after
-being away it plays an excitement wiggle (head + antenna flaps) and then keeps calm eye contact
-with the antennas still; when they leave (2 s) the antennas droop and the head dips, then it
+Reactions on top of the tracking (disable with `--no-reactions`): the antennas stay still
+while it tracks; when the person leaves (2 s) the antennas droop and the head dips, then it
 looks around slowly for ~9 s; with nobody around it twitches an antenna now and then.
 Timings are constants at the top of `src/look_straight.py`; the gestures live in `src/gestures.py`.
 
