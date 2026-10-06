@@ -13,7 +13,7 @@ from reachy_mini.reachy_mini import INIT_ANTENNAS_JOINT_POSITIONS
 
 from face_centering import Rig
 
-FAST_SPEED = math.radians(150)  # for quick gestures
+FAST_SPEED = math.radians(110)  # for quick gestures
 
 # The original companion's emotion choreography: (yaw, up, roll, seconds), angles in
 # radians. +yaw = robot's left, +up = looks up.
@@ -93,10 +93,10 @@ class Gestures:
         and flapping (~1.4 s). Leaves tracking off: the caller turns it back on."""
         yaw0, pitch0, _ = self.rig.current_goal_deg()
         self.flap(0.6, 0.65)
-        self.move(yaw0, pitch0 - 12, 10, 0.25)
-        self.flap(0.4, 0.65)
-        self.move(yaw0, pitch0 - 7, -10, 0.25)
         self.move(yaw0, pitch0 - 12, 8, 0.25)
+        self.flap(0.4, 0.65)
+        self.move(yaw0, pitch0 - 7, -8, 0.25)
+        self.move(yaw0, pitch0 - 12, 6, 0.25)
         self.move(yaw0, pitch0, 0, 0.4)
         self.rig.antennas()
 

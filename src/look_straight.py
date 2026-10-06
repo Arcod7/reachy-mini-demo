@@ -42,7 +42,7 @@ LOST_AFTER_S = 2.0  # no face for this long -> the person left
 IDLE_TWITCH_S = (20.0, 40.0)  # nobody around: twitch an antenna every so often
 TILT_EVERY_S = (8.0, 18.0)  # looking at someone: tilt the head this often ...
 TILT_HOLD_S = (2.0, 3.8)  # ... for this long
-TILT_DEG = (9.0, 14.0)  # ... by this much (left or right at random)
+TILT_DEG = (8.0, 12.0)  # ... by this much (left or right at random)
 EARS_EVERY_S = (5.0, 12.0)  # random cute ear movement while looking at someone
 
 

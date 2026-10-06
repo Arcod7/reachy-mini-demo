@@ -54,14 +54,14 @@ DEFAULT_CAL = {"latency_s": 0.06, "px_per_deg_yaw": 11.9, "px_per_deg_pitch": -1
 OMEGA = 3.0  # spring stiffness (rad/s): ~1.3 s to settle
 GOAL_TAU = 0.25  # first-order smoothing of the goal before the spring (s)
 MAX_SPEED = math.radians(40)
-YAW_LIMIT = math.radians(80)  # head yaw in the world frame (also kept within HEAD_BODY_DELTA of the waist)
+YAW_LIMIT = math.radians(75)  # head yaw in the world frame (also kept within HEAD_BODY_DELTA of the waist)
 BODY_LIMIT = math.radians(100)
-HEAD_BODY_DELTA = math.radians(60)  # the SDK allows 65; stay inside
-BODY_CENTER_DELTA = math.radians(50)  # while tracking the waist drifts back to 0, but never further than this behind the head
+HEAD_BODY_DELTA = math.radians(45)  # head yaw relative to the waist (the SDK allows 65)
+BODY_CENTER_DELTA = math.radians(35)  # while tracking the waist drifts back to 0, but never further than this behind the head
 BODY_OMEGA = 1.5  # waist spring (rad/s): slow and gentle
 BODY_MAX_SPEED = math.radians(35)
 PITCH_LIMIT = math.radians(28)
-ROLL_LIMIT = math.radians(25)
+ROLL_LIMIT = math.radians(15)
 ANTENNA_TAU = 0.06  # antenna smoothing (s)
 FILTER_MIN_CUTOFF = 0.6  # Hz, when the face is still (kills detector jitter)
 FILTER_BETA = 12.0  # cutoff rise per rad/s of face motion (keeps up when you move)
@@ -167,6 +167,23 @@ def pick_face(faces: list, prev: tuple[float, float] | None, w: int):
         if math.hypot(*(a - b for a, b in zip(eye_mid(best), prev))) < 0.25 * w:
             return best
     return max(faces, key=lambda f: f.bbox[2] * f.bbox[3])
+
+
+def limit_pose(yaw: float, pitch: float, roll: float, body: float) -> tuple[float, float, float]:
+    """Safety envelope so the head cannot hit its own body, applied to everything we send.
+
+    Pitch and roll must stay inside an ellipse (a big tilt leaves less room for a big
+    nod), and that ellipse shrinks as the head turns far from the waist.
+    """
+    yaw = float(np.clip(yaw, body - HEAD_BODY_DELTA, body + HEAD_BODY_DELTA))
+    yaw = float(np.clip(yaw, -YAW_LIMIT, YAW_LIMIT))
+    turn = abs(yaw - body)
+    shrink = 1.0 - 0.4 * max(0.0, (turn - math.radians(25)) / (HEAD_BODY_DELTA - math.radians(25)))
+    p_max, r_max = PITCH_LIMIT * shrink, ROLL_LIMIT * shrink
+    k = math.hypot(pitch / p_max, roll / r_max)
+    if k > 1.0:
+        pitch, roll = pitch / k, roll / k
+    return yaw, pitch, roll
 
 
 def load_cal() -> dict:
@@ -581,11 +598,7 @@ class Rig:
             else:
                 target_yaw, target_pitch, target_roll = sg["yaw"], sg["pitch"], sg["roll"]
                 omega, tau, vmax = sg["omega"], sg["tau"], sg["vmax"]
-            yaw_lo = max(-YAW_LIMIT, m_body - HEAD_BODY_DELTA)
-            yaw_hi = min(YAW_LIMIT, m_body + HEAD_BODY_DELTA)
-            target_yaw = float(np.clip(target_yaw, yaw_lo, yaw_hi))
-            target_pitch = float(np.clip(target_pitch, -PITCH_LIMIT, PITCH_LIMIT))
-            target_roll = float(np.clip(target_roll, -ROLL_LIMIT, ROLL_LIMIT))
+            target_yaw, target_pitch, target_roll = limit_pose(target_yaw, target_pitch, target_roll, m_body)
 
             # Stage 1: first-order smoothing of the goal (removes steps -> continuous
             # acceleration). Stage 2: critically damped spring on the *measured* pose;
@@ -604,6 +617,7 @@ class Rig:
                 ax[0] = float(np.clip(cmd + vel * dt, -lim, lim))
                 ax[1] = vel
             (yaw, vyaw, _, _), (pitch, vpitch, _, _), (roll, vroll, _, _) = axes
+            yaw, pitch, roll = limit_pose(yaw, pitch, roll, m_body)  # never leave the safe envelope
 
             a_ant = 1.0 - math.exp(-dt / ANTENNA_TAU)
             ant = [a + a_ant * (g - a) for a, g in zip(ant, ant_goal)]
