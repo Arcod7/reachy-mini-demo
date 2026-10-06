@@ -11,8 +11,8 @@ Pipeline (all on the robot, see face_centering.py):
       -> set_target @ 50 Hz
 
 On top of the tracking, small reactions (disable with --no-reactions):
-  * they leave (2 s without a face)    -> antennas droop and the head dips, then it
-                                          looks around slowly for ~9 s, then idles
+  * they leave (2 s without a face)    -> ears droop (ears only), then it looks around
+                                          slowly with its waist for ~9 s, then idles
   * nobody around                      -> an occasional curious antenna twitch
 While it is tracking the antennas stay still.
 
@@ -64,8 +64,10 @@ def presence_loop(rig: Rig) -> None:
             if state == "tracking" and now - last_seen > LOST_AFTER_S:
                 print("Person left: looking for them...", flush=True)
                 g.droop()
-                if not g.search():
-                    g.look_forward(1.5)
+                found = g.search()
+                rig.body_center()  # waist back to centre (gently)
+                if not found:
+                    g.look_forward(2.0)
                 rig.set_tracking(True)
                 g.rig.antennas()
                 state = "idle"

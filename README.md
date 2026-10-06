@@ -36,8 +36,9 @@ your computer (the robot cannot join WPA-Enterprise networks; a phone hotspot wo
    (stop the service first). Results go to `~/camera_calibration.json`.
 
 Reactions on top of the tracking (disable with `--no-reactions`): the antennas stay still
-while it tracks; when the person leaves (2 s) the antennas droop and the head dips, then it
-looks around slowly for ~9 s; with nobody around it twitches an antenna now and then.
+while it tracks; when the person leaves (2 s) the ears droop (ears only), then it looks
+around slowly for ~9 s by turning its waist (the head follows, +/-65 deg), and the waist
+drifts back to centre afterwards; with nobody around it twitches an antenna now and then.
 Timings are constants at the top of `src/look_straight.py`; the gestures live in `src/gestures.py`.
 
 Live view and tracking state: <http://reachy-mini.local:8080> (camera with the centre

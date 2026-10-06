@@ -99,21 +99,22 @@ class Gestures:
         self.rig.antennas()
 
     def droop(self, seconds: float = 1.5) -> None:
-        """Sad: antennas fall outward, head dips. Returns early if stopping."""
+        """Sad: the antennas fall outward (ears only, the head stays put)."""
         left, right = INIT_ANTENNAS_JOINT_POSITIONS
         self.rig.antennas(left=left - 0.8, right=right + 0.8)
-        self.move(None, 9, 0, 1.0, wait=False)
         self.wait(seconds)
 
     def search(self, seconds: float = 9.0) -> bool:
-        """Slow look-around (like a patrol). True as soon as a face shows up."""
+        """Slow look-around with the waist, the head following it (like a patrol).
+        True as soon as a face shows up. The caller restores tracking / the waist."""
         end, side = time.monotonic() + seconds, 1
         next_sweep = 0.0
         while time.monotonic() < end and not self.stop.is_set():
             if self.rig.face() is not None:
                 return True
             if time.monotonic() >= next_sweep:
-                self.rig.look_deg(30 * side, -3, 0, omega=1.6, tau=0.4)
-                side, next_sweep = -side, time.monotonic() + 3.5
+                self.rig.body_look_deg(65 * side)  # waist
+                self.rig.look_deg(65 * side, -3, 0, omega=1.6, tau=0.4)  # head follows
+                side, next_sweep = -side, time.monotonic() + 4.5
             self.wait(0.1)
         return False

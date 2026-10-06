@@ -54,7 +54,12 @@ DEFAULT_CAL = {"latency_s": 0.06, "px_per_deg_yaw": 11.9, "px_per_deg_pitch": -1
 OMEGA = 3.0  # spring stiffness (rad/s): ~1.3 s to settle
 GOAL_TAU = 0.25  # first-order smoothing of the goal before the spring (s)
 MAX_SPEED = math.radians(40)
-YAW_LIMIT = math.radians(55)
+YAW_LIMIT = math.radians(80)  # head yaw in the world frame (also kept within HEAD_BODY_DELTA of the waist)
+BODY_LIMIT = math.radians(100)
+HEAD_BODY_DELTA = math.radians(60)  # the SDK allows 65; stay inside
+BODY_CENTER_DELTA = math.radians(50)  # while tracking the waist drifts back to 0, but never further than this behind the head
+BODY_OMEGA = 1.5  # waist spring (rad/s): slow and gentle
+BODY_MAX_SPEED = math.radians(35)
 PITCH_LIMIT = math.radians(28)
 ROLL_LIMIT = math.radians(25)
 ANTENNA_TAU = 0.06  # antenna smoothing (s)
@@ -79,7 +84,7 @@ h+=(s.detected?"<b style='color:#4f4'>FACE DETECTED</b>":"<b style='color:#f84'>
 if(s.tracking)h+="eye-midpoint error  x "+f(s.err_x_avg,3)+"  y "+f(s.err_y_avg,3)+"   rms "+s.err_rms.toFixed(3)+
 "   (0 = centred, goal +/-"+s.tolerance+")  "+(s.within_tol?"<b style='color:#4f4'>CENTRED</b>":"<b style='color:#fc4'>correcting</b>")+"\\n";
 h+="it still wants to turn  yaw "+f(s.goal_err_yaw_deg,2)+"deg  pitch "+f(s.goal_err_pitch_deg,2)+"deg\\n"+
-"head command            yaw "+f(s.cmd_yaw_deg)+"deg  pitch "+f(s.cmd_pitch_deg)+"deg  roll "+f(s.cmd_roll_deg)+"deg   speed "+s.speed_deg_s.toFixed(1)+" deg/s"+(s.still?"  (still)":"");
+"head command            yaw "+f(s.cmd_yaw_deg)+"deg  pitch "+f(s.cmd_pitch_deg)+"deg  roll "+f(s.cmd_roll_deg)+"deg  waist "+f(s.cmd_body_deg)+"deg   speed "+s.speed_deg_s.toFixed(1)+" deg/s"+(s.still?"  (still)":"");
 document.getElementById("s").innerHTML=h;
 }catch(e){}
 setTimeout(tick,150)}tick();
@@ -183,6 +188,8 @@ class Rig:
         self._goal = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "omega": OMEGA,
                       "tau": GOAL_TAU, "vmax": MAX_SPEED}
         self._ant = list(INIT_ANTENNAS_JOINT_POSITIONS)
+        self._body_manual = False  # False: waist drifts back to centre; True: follows _body_goal
+        self._body_goal = 0.0
         self._cur = (0.0, 0.0, 0.0)  # smoothed goal now (yaw, pitch, roll); written by the controller
         self._settled = False
         self._threads: list[threading.Thread] = []
@@ -192,7 +199,7 @@ class Rig:
             "err_x": 0.0, "err_y": 0.0, "err_x_avg": 0.0, "err_y_avg": 0.0,
             "err_rms": 0.0, "within_tol": False, "tolerance": TOLERANCE,
             "goal_err_yaw_deg": 0.0, "goal_err_pitch_deg": 0.0,
-            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0,
+            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0,
             "speed_deg_s": 0.0, "still": False,
         }
 
@@ -250,6 +257,18 @@ class Rig:
         r = math.radians
         self.look(None if yaw is None else r(yaw), None if pitch is None else r(pitch),
                   None if roll is None else r(roll), **kw)
+
+    def body_look_deg(self, yaw: float) -> None:
+        """Turn the waist to `yaw` degrees (slowly, +yaw = robot's left); the head follows
+        only if you also `look()`. Stays until `body_center()`."""
+        with self.lock:
+            self._body_manual = True
+            self._body_goal = max(-BODY_LIMIT, min(BODY_LIMIT, math.radians(yaw)))
+
+    def body_center(self) -> None:
+        """Waist back towards centre (never leaving the head more than 50 deg ahead of it)."""
+        with self.lock:
+            self._body_manual = False
 
     def antennas(self, left: float | None = None, right: float | None = None) -> None:
         """Antenna goals in radians; None = rest pose for that antenna."""
@@ -419,6 +438,8 @@ class Rig:
         with self.lock:  # scripted goal starts where the head is
             self._goal.update(yaw=m_yaw, pitch=m_pitch, roll=m_roll)
         ant = list(INIT_ANTENNAS_JOINT_POSITIONS)
+        body_cmd = gs_body = float(mini.get_current_joint_positions()[0][0])
+        vbody = 0.0
         f_yaw = OneEuro(FILTER_MIN_CUTOFF, FILTER_BETA)
         f_pitch = OneEuro(FILTER_MIN_CUTOFF, FILTER_BETA)
         avg_x = avg_y = 0.0
@@ -432,6 +453,7 @@ class Rig:
             T_now = mini.get_current_head_pose()
             hist.add(now, T_now)
             m_roll, m_pitch, m_yaw = euler(T_now)
+            m_body = float(mini.get_current_joint_positions()[0][0])
 
             # Measured head speed over the last 0.25 s.
             _, o_pitch, o_yaw = euler(hist.at(now - 0.25))
@@ -443,6 +465,7 @@ class Rig:
                 edge, self._track_edge = self._track_edge, False
                 sg = dict(self._goal)
                 ant_goal = list(self._ant)
+                body_manual, body_goal = self._body_manual, self._body_goal
 
             if edge:  # tracking just switched on: start from where we are, with a grace period
                 goal_yaw, goal_pitch = gs_yaw, gs_pitch
@@ -485,7 +508,9 @@ class Rig:
             else:
                 target_yaw, target_pitch, target_roll = sg["yaw"], sg["pitch"], sg["roll"]
                 omega, tau, vmax = sg["omega"], sg["tau"], sg["vmax"]
-            target_yaw = float(np.clip(target_yaw, -YAW_LIMIT, YAW_LIMIT))
+            yaw_lo = max(-YAW_LIMIT, m_body - HEAD_BODY_DELTA)
+            yaw_hi = min(YAW_LIMIT, m_body + HEAD_BODY_DELTA)
+            target_yaw = float(np.clip(target_yaw, yaw_lo, yaw_hi))
             target_pitch = float(np.clip(target_pitch, -PITCH_LIMIT, PITCH_LIMIT))
             target_roll = float(np.clip(target_roll, -ROLL_LIMIT, ROLL_LIMIT))
 
@@ -496,7 +521,7 @@ class Rig:
             gs_yaw += a_goal * (target_yaw - gs_yaw)
             gs_pitch += a_goal * (target_pitch - gs_pitch)
             gs_roll += a_goal * (target_roll - gs_roll)
-            limits = (YAW_LIMIT, PITCH_LIMIT, ROLL_LIMIT)
+            limits = (YAW_LIMIT, PITCH_LIMIT, ROLL_LIMIT)  # (yaw also bounded by the waist window above)
             axes = [[yaw, vyaw, m_yaw, gs_yaw], [pitch, vpitch, m_pitch, gs_pitch],
                     [roll, vroll, m_roll, gs_roll]]
             for ax, lim in zip(axes, limits):
@@ -510,9 +535,19 @@ class Rig:
             a_ant = 1.0 - math.exp(-dt / ANTENNA_TAU)
             ant = [a + a_ant * (g - a) for a, g in zip(ant, ant_goal)]
 
+            # Waist: slow spring on the measured waist angle. Centre mode drifts back to 0
+            # but never lets the head get more than BODY_CENTER_DELTA ahead of it.
+            body_target = body_goal if body_manual else float(
+                np.clip(0.0, m_yaw - BODY_CENTER_DELTA, m_yaw + BODY_CENTER_DELTA))
+            gs_body += (1.0 - math.exp(-dt / 0.3)) * (body_target - gs_body)
+            acc = BODY_OMEGA * BODY_OMEGA * (gs_body - m_body) - 2.0 * BODY_OMEGA * vbody
+            vbody = float(np.clip(vbody + acc * dt, -BODY_MAX_SPEED, BODY_MAX_SPEED))
+            body_cmd = float(np.clip(body_cmd + vbody * dt, -BODY_LIMIT, BODY_LIMIT))
+
             mini.set_target(
                 head=create_head_pose(roll=roll, pitch=pitch, yaw=yaw, degrees=False, mm=False),
                 antennas=ant,
+                body_yaw=body_cmd,
             )
 
             err_yaw, err_pitch = gs_yaw - m_yaw, gs_pitch - m_pitch
@@ -532,7 +567,7 @@ class Rig:
                     goal_err_yaw_deg=math.degrees(err_yaw),
                     goal_err_pitch_deg=math.degrees(err_pitch),
                     cmd_yaw_deg=math.degrees(yaw), cmd_pitch_deg=math.degrees(pitch),
-                    cmd_roll_deg=math.degrees(roll),
+                    cmd_roll_deg=math.degrees(roll), cmd_body_deg=math.degrees(m_body),
                     speed_deg_s=math.degrees(spd), still=bool(speed < STILL_SPEED),
                 )
 
