@@ -39,10 +39,11 @@ Personality on top of the tracking (disable all of it with `--no-reactions`):
 - mostly looks straight at the nearest person; every ~8-18 s it tilts its head left or right
   (9-14 deg) for 2-4 s, then straightens up;
 - random small ear movements (twitch, flutter, perk, double flap) every ~5-12 s;
-- if you wave: a short "yeaay!" (head up and bobbing, ears wide open, ~1.4 s). Waves are
-  detected from motion next to the face swinging left-right at least 3 times (heuristic, so it can
-  miss or false-trigger; the live view shows a `wave score`, 1 = wave, and an orange circle on the
-  motion). Constants at the top of `src/face_centering.py`;
+- if you hold up an open hand: a short "yeaay!" (head up and bobbing, ears wide open, ~1.4 s).
+  A real hand detector runs on the robot (MediaPipe palm + 21 hand landmarks, OpenCV Zoo ONNX models
+  in `models/`, fetched by `scripts/get_models.sh`): the hand must have index, middle, ring and pinky
+  extended for ~0.5 s, 6 s cooldown. The live view outlines the hand and its landmarks. It costs about
+  0.2 s of one core per check on the Pi; constants at the top of `src/face_centering.py`;
 - when the person leaves (2 s) the ears droop (ears only), then it looks around slowly for ~9 s with
   its waist (the head follows, +/-65 deg) and the waist drifts back to centre; with nobody around it
   twitches an antenna now and then.

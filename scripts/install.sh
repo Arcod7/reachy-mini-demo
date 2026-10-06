@@ -16,6 +16,7 @@ scp_() { if [ -n "${ROBOT_PASSWORD:-}" ]; then sshpass -p "$ROBOT_PASSWORD" scp 
 echo "==> Copying files to $ROBOT"
 ssh_ "$ROBOT" "mkdir -p $DEST"
 scp_ "$HERE"/src/*.py "$ROBOT:$DEST/"
+[ -d "$HERE/models" ] && { ssh_ "$ROBOT" "mkdir -p $DEST/models"; scp_ "$HERE"/models/*.onnx "$ROBOT:$DEST/models/"; }
 [ -d "$HERE/speech" ] && { ssh_ "$ROBOT" "mkdir -p $DEST/speech"; scp_ "$HERE"/speech/* "$ROBOT:$DEST/speech/"; }
 scp_ "$HERE/systemd/reachy-look.service" "$ROBOT:/tmp/reachy-look.service"
 

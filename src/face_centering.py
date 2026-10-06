@@ -68,14 +68,13 @@ FILTER_BETA = 12.0  # cutoff rise per rad/s of face motion (keeps up when you mo
 STILL_SPEED = math.radians(2.0)  # head counts as still below this (rad/s)
 HOLD_S = 0.8  # keep the last goal this long when the face vanishes
 LOST_RECENTRE_S = 6.0  # then, after this long, look straight ahead
-# Wave detection (motion next to the face, swinging left-right a few times).
-WAVE_WINDOW_S = 1.6
-WAVE_MIN_SWING = 0.10  # total centroid swing, fraction of the image width
-WAVE_STROKE = 0.035  # each left/right stroke must cover at least this (jitter must not count)
-WAVE_MIN_REVERSALS = 3  # R-L-R-L
-WAVE_MAX_AREA = 0.08  # motion blob (fraction of the frame): a hand, not the whole scene
 WAVE_COOLDOWN_S = 6.0
 WAVE_MAX_HEAD_SPEED = 5.0  # deg/s; the camera must be still or the whole image moves
+# Open-hand trigger ("hello!"): an open hand held up near the face.
+HAND_PERIOD_S = 0.1  # pause between hand checks; one check takes ~0.2 s on the Pi
+HAND_FRAMES = 2  # consecutive detections with an open hand (~0.5 s hold)
+HAND_COOLDOWN_S = 6.0
+HAND_CROP_FACES = 6.0  # square crop side, in face widths, centred a bit below the face
 TOLERANCE = 0.01  # target accuracy (normalised image units; 1 = half the image)
 
 PAGE = b"""<!doctype html><meta name=viewport content="width=device-width">
@@ -91,8 +90,8 @@ h+=(s.detected?"<b style='color:#4f4'>FACE DETECTED</b>":"<b style='color:#f84'>
 "   "+(s.tracking?"tracking":"scripted head")+"   detector "+s.fps.toFixed(1)+" fps   camera latency "+(s.latency_s*1000).toFixed(0)+" ms\\n";
 if(s.tracking)h+="eye-midpoint error  x "+f(s.err_x_avg,3)+"  y "+f(s.err_y_avg,3)+"   rms "+s.err_rms.toFixed(3)+
 "   (0 = centred, goal +/-"+s.tolerance+")  "+(s.within_tol?"<b style='color:#4f4'>CENTRED</b>":"<b style='color:#fc4'>correcting</b>")+"\\n";
-if(s.wave)h+="<b style='color:#fc4'>WAVE!</b>   ";
-h+="wave score "+s.wave_score.toFixed(2)+" (1 = wave)\\n";
+if(s.hand==="open")h+="<b style='color:#fc4'>OPEN HAND</b> ("+s.hand_open_frames+"/2)   ";
+else if(s.hand==="closed")h+="hand seen (not open)   ";
 h+="it still wants to turn  yaw "+f(s.goal_err_yaw_deg,2)+"deg  pitch "+f(s.goal_err_pitch_deg,2)+"deg\\n"+
 "head command            yaw "+f(s.cmd_yaw_deg)+"deg  pitch "+f(s.cmd_pitch_deg)+"deg  roll "+f(s.cmd_roll_deg)+"deg  waist "+f(s.cmd_body_deg)+"deg   speed "+s.speed_deg_s.toFixed(1)+" deg/s"+(s.still?"  (still)":"");
 document.getElementById("s").innerHTML=h;
@@ -194,8 +193,9 @@ class Rig:
         self._det: dict = {"seq": 0}  # newest detection
         self.det_log: list | None = None  # filled during calibration
         self._track_roll = 0.0  # head roll (rad) while tracking: set by the demo's personality
-        self.wave_seq = 0  # increments on every detected wave
-        self._blackout_until = 0.0  # no wave detection until then (the robot is moving itself)
+        self.hand_seq = 0  # increments every time an open hand is shown
+        self._hand_vis: dict | None = None  # last hand seen (for the live view)
+        self._latest: tuple | None = None  # (t, frame, face bbox in full-res pixels) for the hand thread
         self._tracking = False
         self._track_edge = False
         self._goal = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "omega": OMEGA,
@@ -212,7 +212,7 @@ class Rig:
             "err_x": 0.0, "err_y": 0.0, "err_x_avg": 0.0, "err_y_avg": 0.0,
             "err_rms": 0.0, "within_tol": False, "tolerance": TOLERANCE,
             "goal_err_yaw_deg": 0.0, "goal_err_pitch_deg": 0.0,
-            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0, "wave": False, "wave_score": 0.0,
+            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0, "hand": "", "hand_open_frames": 0,
             "speed_deg_s": 0.0, "still": False,
         }
 
@@ -228,6 +228,7 @@ class Rig:
         self._spawn(self._detector_loop)
         if controller:
             self._spawn(self._control_loop)
+            self._spawn(self._hand_loop)
 
     def stop(self) -> None:
         """Stop the detector and controller threads (before parking the robot)."""
@@ -271,14 +272,8 @@ class Rig:
         self.look(None if yaw is None else r(yaw), None if pitch is None else r(pitch),
                   None if roll is None else r(roll), **kw)
 
-    def motion_blackout(self, seconds: float) -> None:
-        """The robot is about to move itself (tilt, ears): ignore image motion for a while."""
-        with self.lock:
-            self._blackout_until = max(self._blackout_until, time.monotonic() + seconds)
-
     def set_tilt_deg(self, deg: float) -> None:
         """Head roll to hold while tracking (the robot's own cute tilt); 0 = straight."""
-        self.motion_blackout(2.0)  # the whole image rotates while it tilts
         with self.lock:
             self._track_roll = max(-ROLL_LIMIT, min(ROLL_LIMIT, math.radians(deg)))
 
@@ -397,9 +392,6 @@ class Rig:
         size = (DETECT_WIDTH, int(round(height * scale)))
         prev: tuple[float, float] | None = None
         seq, n, fps_t, fps_n = 0, 0, time.monotonic(), 0
-        prev_gray = None
-        motion: collections.deque = collections.deque()  # (t, centroid x in [0,1])
-        last_wave, wave_score, motion_pt, wave_area = -1e9, 0.0, None, 0.0
         while not self.stop_event.is_set():
             frame = self.mini.media.get_frame()
             t_arr = time.monotonic()
@@ -416,61 +408,8 @@ class Rig:
                     self.state["fps"] = fps_n / (t_arr - fps_t)
                 fps_t, fps_n = t_arr, 0
 
-            # --- wave: motion next to the face, swinging left-right
-            gray = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(small, (96, 54)), cv2.COLOR_BGR2GRAY), (5, 5), 0)
-            motion_pt = None
             with self.lock:
-                head_speed = self.state["speed_deg_s"]
-                blackout = t_arr < self._blackout_until
-            if prev_gray is not None and face is not None and head_speed < WAVE_MAX_HEAD_SPEED \
-                    and not blackout:
-                mask = cv2.absdiff(gray, prev_gray) > 28
-                sx, sy = 96 / size[0], 54 / size[1]
-                bx, by, bw, bh = face.bbox  # ignore the face itself (and a margin around it)
-                x0, x1 = int((bx - 0.25 * bw) * sx), int((bx + 1.25 * bw) * sx)
-                y0, y1 = int((by - 0.25 * bh) * sy), int((by + 1.4 * bh) * sy)
-                mask[max(0, y0):y1, max(0, x0):x1] = False
-                frac = float(mask.mean())
-                if 0.004 < frac < WAVE_MAX_AREA:  # a hand-sized blob, not the whole scene
-                    ys, xs = np.nonzero(mask)
-                    cy_ = float(ys.mean())
-                    # a waving hand is around face height: between above the head and the chest
-                    if (by - 0.5 * bh) * sy <= cy_ <= (by + 3.0 * bh) * sy:
-                        motion.append((t_arr, float(xs.mean()) / 96))
-                        motion_pt = (float(xs.mean()) / 96, cy_ / 54)
-                        wave_area = frac
-            else:
-                motion.clear()
-            prev_gray = gray
-            while motion and t_arr - motion[0][0] > WAVE_WINDOW_S:
-                motion.popleft()
-            wave_score = 0.0
-            if len(motion) >= 7:
-                xs_ = np.convolve(np.array([m[1] for m in motion]), np.ones(3) / 3, mode="valid")
-                # Count real strokes: direction changes after moving at least WAVE_STROKE.
-                reversals, direction, ext = 0, 0, xs_[0]
-                for x in xs_[1:]:
-                    if direction >= 0 and x <= ext - WAVE_STROKE:
-                        reversals += direction == 1
-                        direction, ext = -1, x
-                    elif direction <= 0 and x >= ext + WAVE_STROKE:
-                        reversals += direction == -1
-                        direction, ext = 1, x
-                    elif (direction == 1 and x > ext) or (direction == -1 and x < ext):
-                        ext = x
-                swing = float(xs_.max() - xs_.min())
-                wave_score = min(reversals / WAVE_MIN_REVERSALS, swing / WAVE_MIN_SWING)
-                if (reversals >= WAVE_MIN_REVERSALS and swing >= WAVE_MIN_SWING
-                        and t_arr - last_wave > WAVE_COOLDOWN_S):
-                    last_wave = t_arr
-                    motion.clear()
-                    with self.lock:
-                        self.wave_seq += 1
-                    print(f"Wave detected! reversals={reversals} swing={swing:.2f} "
-                          f"blob={wave_area:.3f} frames={len(xs_) + 2}", flush=True)
-            with self.lock:
-                self.state["wave_score"] = wave_score
-                self.state["wave"] = t_arr - last_wave < 1.5
+                self._latest = (t_arr, frame, None if face is None else tuple(v / scale for v in face.bbox))
 
             eye = None
             if face is not None:
@@ -497,8 +436,15 @@ class Rig:
                     x, y, bw, bh = (v / scale for v in f.bbox)
                     cv2.rectangle(view, (int(x), int(y)), (int(x + bw), int(y + bh)),
                                   (120, 120, 120), 1)
-                if motion_pt is not None:
-                    cv2.circle(view, (int(motion_pt[0] * width), int(motion_pt[1] * height)), 10, (0, 140, 255), 2)
+                with self.lock:
+                    hv = self._hand_vis
+                if hv is not None and time.monotonic() - hv["t"] < 0.6:
+                    x1, y1, x2, y2 = hv["bbox"]
+                    colour = (0, 220, 255) if hv["open"] else (0, 120, 255)
+                    cv2.rectangle(view, (int(x1), int(y1)), (int(x2), int(y2)), colour, 2)
+                    if hv["landmarks"] is not None:
+                        for px, py in hv["landmarks"]:
+                            cv2.circle(view, (int(px), int(py)), 3, colour, -1)
                 if eye is not None:
                     cv2.line(view, (int(cx), int(cy)), (int(eye[0]), int(eye[1])), (0, 200, 255), 2)
                     cv2.circle(view, (int(eye[0]), int(eye[1])), 14, (0, 255, 0), 2)
@@ -506,6 +452,47 @@ class Rig:
                 if ok:
                     with self.lock:
                         self._jpeg = buf.tobytes()
+
+    def _hand_loop(self) -> None:
+        """Look for an open hand in a crop around the face (runs on the robot, ~5 fps)."""
+        import hand_detector
+        model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        if not hand_detector.available(model_dir):
+            print(f"Hand models not found in {model_dir}: open-hand trigger disabled "
+                  f"(run scripts/get_models.sh, then scripts/install.sh).", flush=True)
+            return
+        det = hand_detector.OpenHandDetector(model_dir)
+        open_frames, last_trigger, last_t = 0, -1e9, 0.0
+        while not self.stop_event.is_set():
+            time.sleep(HAND_PERIOD_S)
+            with self.lock:
+                latest = self._latest
+            if latest is None or latest[2] is None or latest[0] == last_t or time.monotonic() - latest[0] > 0.5:
+                open_frames = 0
+                continue
+            last_t, frame, (bx, by, bw, bh) = latest[0], latest[1], latest[2]
+            h, w = frame.shape[:2]
+            side = int(min(h, max(300.0, HAND_CROP_FACES * bw)))
+            x0 = int(min(max(bx + bw / 2 - side / 2, 0), w - side))
+            y0 = int(min(max(by + bh / 2 + 0.5 * bh - side / 2, 0), h - side))
+            res = det.detect(np.ascontiguousarray(frame[y0:y0 + side, x0:x0 + side]))
+            now = time.monotonic()
+            if res is None:
+                open_frames = 0
+                with self.lock:
+                    self.state.update(hand="", hand_open_frames=0)
+                continue
+            open_frames = open_frames + 1 if res["open"] else 0
+            lm = None if res["landmarks"] is None else res["landmarks"] + [x0, y0]
+            x1, y1, x2, y2 = (res["bbox"] + [x0, y0, x0, y0]).tolist()
+            with self.lock:
+                self._hand_vis = {"t": now, "bbox": (x1, y1, x2, y2), "open": res["open"], "landmarks": lm}
+                self.state.update(hand="open" if res["open"] else "closed", hand_open_frames=open_frames)
+            if open_frames >= HAND_FRAMES and now - last_trigger > HAND_COOLDOWN_S:
+                last_trigger, open_frames = now, 0
+                with self.lock:
+                    self.hand_seq += 1
+                print("Open hand detected!", flush=True)
 
     def _control_loop(self) -> None:
         mini, hist, cal = self.mini, self.hist, self.cal

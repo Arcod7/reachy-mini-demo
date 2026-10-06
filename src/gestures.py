@@ -91,7 +91,6 @@ class Gestures:
     def yeay(self) -> None:
         """A short 'yeaay!': head up and bobbing around where it is looking, ears wide open
         and flapping (~1.4 s). Leaves tracking off: the caller turns it back on."""
-        self.rig.motion_blackout(3.0)
         yaw0, pitch0, _ = self.rig.current_goal_deg()
         self.flap(0.6, 0.65)
         self.move(yaw0, pitch0 - 12, 10, 0.25)
@@ -106,7 +105,6 @@ class Gestures:
         if getattr(self, "_ears_busy", False):
             return
         left, right = INIT_ANTENNAS_JOINT_POSITIONS
-        self.rig.motion_blackout(1.6)  # the ears may be in view: not a wave
         pattern = random.choice(("twitch", "flutter", "perk", "double_flap", "flutter", "twitch"))
 
         def run() -> None:

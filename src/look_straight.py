@@ -14,7 +14,7 @@ Personality on top of the tracking (disable all with --no-reactions):
   * mostly looks straight at you; every ~8-18 s it tilts its head to the left or right
     for a few seconds (cute, curious), then straightens up
   * random small ear movements (twitch, flutter, perk, double flap) every ~5-12 s
-  * if you wave at it: a short "yeaay!" (head up and bobbing, ears wide open)
+  * if you show it an open hand: a short "yeaay!" (head up and bobbing, ears wide open)
   * they leave (2 s without a face)    -> ears droop (ears only), then it looks around
                                           slowly with its waist for ~9 s, then idles
   * nobody around                      -> an occasional curious antenna twitch
@@ -58,14 +58,14 @@ def presence_loop(rig: Rig) -> None:
     next_twitch = time.monotonic() + random.uniform(*IDLE_TWITCH_S)
     next_tilt, tilt_end = time.monotonic() + random.uniform(*TILT_EVERY_S), None
     next_ears = time.monotonic() + random.uniform(*EARS_EVERY_S)
-    waves = rig.wave_seq
+    hands = rig.hand_seq
     rig.set_tracking(True)
     while True:
         now = time.monotonic()
-        if rig.wave_seq != waves:  # someone waved
-            waves = rig.wave_seq
+        if rig.hand_seq != hands:  # someone showed an open hand
+            hands = rig.hand_seq
             if state == "tracking":
-                print("Wave! yeaay!", flush=True)
+                print("Open hand! yeaay!", flush=True)
                 rig.set_tilt_deg(0)
                 g.yeay()
                 rig.set_tracking(True)
@@ -141,6 +141,6 @@ def main(do_calibrate: bool, reactions: bool) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--calibrate", action="store_true", help="fit camera latency + px/deg, then exit")
-    parser.add_argument("--no-reactions", action="store_true", help="plain eye contact: no tilts, ear movements, wave reaction or search")
+    parser.add_argument("--no-reactions", action="store_true", help="plain eye contact: no tilts, ear movements, open-hand reaction or search")
     args = parser.parse_args()
     main(args.calibrate, not args.no_reactions)
