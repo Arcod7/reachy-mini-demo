@@ -10,12 +10,14 @@ Pipeline (all on the robot, see face_centering.py):
       -> two-stage smoothing + critically damped spring (on the measured pose)
       -> set_target @ 50 Hz
 
-On top of the tracking, small reactions (disable with --no-reactions):
+Personality on top of the tracking (disable all with --no-reactions):
+  * mostly looks straight at you; every ~8-18 s it tilts its head to the left or right
+    for a few seconds (cute, curious), then straightens up
+  * random small ear movements (twitch, flutter, perk, double flap) every ~5-12 s
+  * if you wave at it: a short "yeaay!" (head up and bobbing, ears wide open)
   * they leave (2 s without a face)    -> ears droop (ears only), then it looks around
                                           slowly with its waist for ~9 s, then idles
   * nobody around                      -> an occasional curious antenna twitch
-While it is tracking the antennas stay still, and the head copies the person's head
-tilt (roll): the eye line is kept level in the camera image (--no-tilt to disable).
 
 Live view + state: http://<robot>:8080
 
@@ -38,6 +40,10 @@ from gestures import Gestures
 PRESENT_S = 0.5  # a face must stay this long before we react
 LOST_AFTER_S = 2.0  # no face for this long -> the person left
 IDLE_TWITCH_S = (20.0, 40.0)  # nobody around: twitch an antenna every so often
+TILT_EVERY_S = (8.0, 18.0)  # looking at someone: tilt the head this often ...
+TILT_HOLD_S = (2.0, 3.8)  # ... for this long
+TILT_DEG = (9.0, 14.0)  # ... by this much (left or right at random)
+EARS_EVERY_S = (5.0, 12.0)  # random cute ear movement while looking at someone
 
 
 def _raise_interrupt(signum, frame) -> None:
@@ -50,19 +56,43 @@ def presence_loop(rig: Rig) -> None:
     state = "idle"  # idle (nobody) | tracking (someone here)
     last_seen, first_seen = -1e9, None
     next_twitch = time.monotonic() + random.uniform(*IDLE_TWITCH_S)
+    next_tilt, tilt_end = time.monotonic() + random.uniform(*TILT_EVERY_S), None
+    next_ears = time.monotonic() + random.uniform(*EARS_EVERY_S)
+    waves = rig.wave_seq
     rig.set_tracking(True)
     while True:
         now = time.monotonic()
+        if rig.wave_seq != waves:  # someone waved
+            waves = rig.wave_seq
+            if state == "tracking":
+                print("Wave! yeaay!", flush=True)
+                rig.set_tilt_deg(0)
+                g.yeay()
+                rig.set_tracking(True)
+                tilt_end, next_tilt = None, time.monotonic() + random.uniform(*TILT_EVERY_S)
+                continue
         if rig.face() is not None:
             if first_seen is None:
                 first_seen = now
             last_seen = now
             if state != "tracking" and now - first_seen >= PRESENT_S:
-                rig.set_tracking(True)  # calm eye contact, antennas still
+                rig.set_tracking(True)  # eye contact
                 state = "tracking"
+            if state == "tracking":  # looking at someone: mostly straight, sometimes tilted, cute ears
+                if tilt_end is None and now >= next_tilt:
+                    rig.set_tilt_deg(random.choice((-1, 1)) * random.uniform(*TILT_DEG))
+                    tilt_end = now + random.uniform(*TILT_HOLD_S)
+                elif tilt_end is not None and now >= tilt_end:
+                    rig.set_tilt_deg(0)
+                    tilt_end, next_tilt = None, now + random.uniform(*TILT_EVERY_S)
+                if now >= next_ears:
+                    g.cute_ears()
+                    next_ears = now + random.uniform(*EARS_EVERY_S)
         else:
             first_seen = None
             if state == "tracking" and now - last_seen > LOST_AFTER_S:
+                rig.set_tilt_deg(0)
+                tilt_end = None
                 print("Person left: looking for them...", flush=True)
                 g.droop()
                 found = g.search()
@@ -79,7 +109,7 @@ def presence_loop(rig: Rig) -> None:
         time.sleep(0.1)
 
 
-def main(do_calibrate: bool, reactions: bool, tilt: bool) -> None:
+def main(do_calibrate: bool, reactions: bool) -> None:
     signal.signal(signal.SIGTERM, _raise_interrupt)
     with ReachyMini() as mini:
         mini.stop_head_tracking()  # make sure the daemon's own tracker isn't steering
@@ -87,7 +117,6 @@ def main(do_calibrate: bool, reactions: bool, tilt: bool) -> None:
         mini.wake_up()
         mini.goto_target(antennas=INIT_ANTENNAS_JOINT_POSITIONS, body_yaw=None, duration=0.5)
         rig = Rig(mini)
-        rig.follow_tilt = tilt
         rig.start(controller=not do_calibrate)
         try:
             time.sleep(1.0)
@@ -112,7 +141,6 @@ def main(do_calibrate: bool, reactions: bool, tilt: bool) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--calibrate", action="store_true", help="fit camera latency + px/deg, then exit")
-    parser.add_argument("--no-reactions", action="store_true", help="plain eye contact, no gestures")
-    parser.add_argument("--no-tilt", action="store_true", help="do not copy the person's head tilt")
+    parser.add_argument("--no-reactions", action="store_true", help="plain eye contact: no tilts, ear movements, wave reaction or search")
     args = parser.parse_args()
-    main(args.calibrate, not args.no_reactions, not args.no_tilt)
+    main(args.calibrate, not args.no_reactions)

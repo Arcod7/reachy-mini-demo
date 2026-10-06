@@ -62,16 +62,18 @@ BODY_OMEGA = 1.5  # waist spring (rad/s): slow and gentle
 BODY_MAX_SPEED = math.radians(35)
 PITCH_LIMIT = math.radians(28)
 ROLL_LIMIT = math.radians(25)
-TILT_DEADZONE = math.radians(2.0)  # ignore eye-line tilts below this (landmark noise)
-TILT_MAX = math.radians(22)  # copy the person's head tilt up to this
-TILT_GAIN = 1.0  # 1 = apply the same tilt
-TILT_RUNAWAY = math.radians(15)  # still this tilted in the image while saturated -> wrong sign
 ANTENNA_TAU = 0.06  # antenna smoothing (s)
 FILTER_MIN_CUTOFF = 0.6  # Hz, when the face is still (kills detector jitter)
 FILTER_BETA = 12.0  # cutoff rise per rad/s of face motion (keeps up when you move)
 STILL_SPEED = math.radians(2.0)  # head counts as still below this (rad/s)
 HOLD_S = 0.8  # keep the last goal this long when the face vanishes
 LOST_RECENTRE_S = 6.0  # then, after this long, look straight ahead
+# Wave detection (motion next to the face, swinging left-right a few times).
+WAVE_WINDOW_S = 1.6
+WAVE_MIN_SWING = 0.07  # centroid swing, fraction of the image width
+WAVE_MIN_REVERSALS = 3
+WAVE_COOLDOWN_S = 6.0
+WAVE_MAX_HEAD_SPEED = 5.0  # deg/s; the camera must be still or the whole image moves
 TOLERANCE = 0.01  # target accuracy (normalised image units; 1 = half the image)
 
 PAGE = b"""<!doctype html><meta name=viewport content="width=device-width">
@@ -87,9 +89,10 @@ h+=(s.detected?"<b style='color:#4f4'>FACE DETECTED</b>":"<b style='color:#f84'>
 "   "+(s.tracking?"tracking":"scripted head")+"   detector "+s.fps.toFixed(1)+" fps   camera latency "+(s.latency_s*1000).toFixed(0)+" ms\\n";
 if(s.tracking)h+="eye-midpoint error  x "+f(s.err_x_avg,3)+"  y "+f(s.err_y_avg,3)+"   rms "+s.err_rms.toFixed(3)+
 "   (0 = centred, goal +/-"+s.tolerance+")  "+(s.within_tol?"<b style='color:#4f4'>CENTRED</b>":"<b style='color:#fc4'>correcting</b>")+"\\n";
+if(s.wave)h+="<b style='color:#fc4'>WAVE!</b>   ";
+h+="wave score "+s.wave_score.toFixed(2)+" (1 = wave)\\n";
 h+="it still wants to turn  yaw "+f(s.goal_err_yaw_deg,2)+"deg  pitch "+f(s.goal_err_pitch_deg,2)+"deg\\n"+
 "head command            yaw "+f(s.cmd_yaw_deg)+"deg  pitch "+f(s.cmd_pitch_deg)+"deg  roll "+f(s.cmd_roll_deg)+"deg  waist "+f(s.cmd_body_deg)+"deg   speed "+s.speed_deg_s.toFixed(1)+" deg/s"+(s.still?"  (still)":"");
-if(s.tracking)h+="\\nperson's head tilt    "+f(s.tilt_deg)+"deg (copied)";
 document.getElementById("s").innerHTML=h;
 }catch(e){}
 setTimeout(tick,150)}tick();
@@ -188,8 +191,8 @@ class Rig:
         self._jpeg: bytes | None = None
         self._det: dict = {"seq": 0}  # newest detection
         self.det_log: list | None = None  # filled during calibration
-        self.follow_tilt = True  # copy the tracked person's head tilt (roll)
-        self.roll_k = -1.0  # d(eye-line angle in image)/d(head roll): -1 by geometry; auto-flipped if wrong
+        self._track_roll = 0.0  # head roll (rad) while tracking: set by the demo's personality
+        self.wave_seq = 0  # increments on every detected wave
         self._tracking = False
         self._track_edge = False
         self._goal = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "omega": OMEGA,
@@ -206,7 +209,7 @@ class Rig:
             "err_x": 0.0, "err_y": 0.0, "err_x_avg": 0.0, "err_y_avg": 0.0,
             "err_rms": 0.0, "within_tol": False, "tolerance": TOLERANCE,
             "goal_err_yaw_deg": 0.0, "goal_err_pitch_deg": 0.0,
-            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0, "tilt_deg": 0.0,
+            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0, "wave": False, "wave_score": 0.0,
             "speed_deg_s": 0.0, "still": False,
         }
 
@@ -264,6 +267,11 @@ class Rig:
         r = math.radians
         self.look(None if yaw is None else r(yaw), None if pitch is None else r(pitch),
                   None if roll is None else r(roll), **kw)
+
+    def set_tilt_deg(self, deg: float) -> None:
+        """Head roll to hold while tracking (the robot's own cute tilt); 0 = straight."""
+        with self.lock:
+            self._track_roll = max(-ROLL_LIMIT, min(ROLL_LIMIT, math.radians(deg)))
 
     def body_look_deg(self, yaw: float) -> None:
         """Turn the waist to `yaw` degrees (slowly, +yaw = robot's left); the head follows
@@ -380,6 +388,9 @@ class Rig:
         size = (DETECT_WIDTH, int(round(height * scale)))
         prev: tuple[float, float] | None = None
         seq, n, fps_t, fps_n = 0, 0, time.monotonic(), 0
+        prev_gray = None
+        motion: collections.deque = collections.deque()  # (t, centroid x in [0,1])
+        last_wave, wave_score, motion_pt = -1e9, 0.0, None
         while not self.stop_event.is_set():
             frame = self.mini.media.get_frame()
             t_arr = time.monotonic()
@@ -396,17 +407,56 @@ class Rig:
                     self.state["fps"] = fps_n / (t_arr - fps_t)
                 fps_t, fps_n = t_arr, 0
 
+            # --- wave: motion next to the face, swinging left-right
+            gray = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(small, (96, 54)), cv2.COLOR_BGR2GRAY), (5, 5), 0)
+            motion_pt = None
+            with self.lock:
+                head_speed = self.state["speed_deg_s"]
+            if prev_gray is not None and face is not None and head_speed < WAVE_MAX_HEAD_SPEED:
+                mask = cv2.absdiff(gray, prev_gray) > 22
+                sx, sy = 96 / size[0], 54 / size[1]
+                bx, by, bw, bh = face.bbox  # ignore the face itself (and a margin around it)
+                x0, x1 = int((bx - 0.25 * bw) * sx), int((bx + 1.25 * bw) * sx)
+                y0, y1 = int((by - 0.25 * bh) * sy), int((by + 1.4 * bh) * sy)
+                mask[max(0, y0):y1, max(0, x0):x1] = False
+                frac = float(mask.mean())
+                if 0.004 < frac < 0.18:  # a hand-sized blob, not the whole scene
+                    ys, xs = np.nonzero(mask)
+                    motion.append((t_arr, float(xs.mean()) / 96))
+                    motion_pt = (float(xs.mean()) / 96, float(ys.mean()) / 54)
+            else:
+                motion.clear()
+            prev_gray = gray
+            while motion and t_arr - motion[0][0] > WAVE_WINDOW_S:
+                motion.popleft()
+            wave_score = 0.0
+            if len(motion) >= 7:
+                xs_ = np.array([m[1] for m in motion])
+                xs_ = np.convolve(xs_, np.ones(3) / 3, mode="valid")
+                d = np.diff(xs_)
+                moves = d[np.abs(d) > 0.004]  # ignore jitter
+                signs = np.sign(moves)
+                reversals = int(np.sum(signs[1:] != signs[:-1])) if len(signs) > 1 else 0
+                swing = float(xs_.max() - xs_.min())
+                wave_score = min(reversals / WAVE_MIN_REVERSALS, swing / WAVE_MIN_SWING)
+                if (reversals >= WAVE_MIN_REVERSALS and swing >= WAVE_MIN_SWING
+                        and t_arr - last_wave > WAVE_COOLDOWN_S):
+                    last_wave = t_arr
+                    motion.clear()
+                    with self.lock:
+                        self.wave_seq += 1
+                    print("Wave detected!", flush=True)
+            with self.lock:
+                self.state["wave_score"] = wave_score
+                self.state["wave"] = t_arr - last_wave < 1.5
+
             eye = None
             if face is not None:
                 prev = eye_mid(face)
                 eye = (prev[0] / scale, prev[1] / scale)  # full-resolution pixels
                 seq += 1
                 area = face.bbox[2] * face.bbox[3] / (size[0] * size[1])
-                # Tilt of the line between the eyes in the image (+ = right eye lower).
-                (x1, y1), (x2, y2) = sorted((face.left_eye, face.right_eye))
-                eye_roll = math.atan2(y2 - y1, x2 - x1)
-                rec = {"seq": seq, "t_arr": t_arr, "u": eye[0], "v": eye[1], "area_frac": area,
-                       "eye_roll": eye_roll}
+                rec = {"seq": seq, "t_arr": t_arr, "u": eye[0], "v": eye[1], "area_frac": area}
                 with self.lock:
                     self._det = rec
                     if self.det_log is not None:
@@ -425,6 +475,8 @@ class Rig:
                     x, y, bw, bh = (v / scale for v in f.bbox)
                     cv2.rectangle(view, (int(x), int(y)), (int(x + bw), int(y + bh)),
                                   (120, 120, 120), 1)
+                if motion_pt is not None:
+                    cv2.circle(view, (int(motion_pt[0] * width), int(motion_pt[1] * height)), 10, (0, 140, 255), 2)
                 if eye is not None:
                     cv2.line(view, (int(cx), int(cy)), (int(eye[0]), int(eye[1])), (0, 200, 255), 2)
                     cv2.circle(view, (int(eye[0]), int(eye[1])), 14, (0, 255, 0), 2)
@@ -453,8 +505,6 @@ class Rig:
         vbody = 0.0
         f_yaw = OneEuro(FILTER_MIN_CUTOFF, FILTER_BETA)
         f_pitch = OneEuro(FILTER_MIN_CUTOFF, FILTER_BETA)
-        f_roll = OneEuro(0.4, 4.0)  # tilt: steady when still
-        goal_roll, psi_avg, sat_since = 0.0, 0.0, None
         avg_x = avg_y = 0.0
         recent: collections.deque = collections.deque(maxlen=20)
         last_seq, last_seen = 0, 0.0
@@ -479,12 +529,12 @@ class Rig:
                 sg = dict(self._goal)
                 ant_goal = list(self._ant)
                 body_manual, body_goal = self._body_manual, self._body_goal
+                track_roll = self._track_roll
 
             if edge:  # tracking just switched on: start from where we are, with a grace period
                 goal_yaw, goal_pitch = gs_yaw, gs_pitch
                 f_yaw.reset()
                 f_pitch.reset()
-                f_roll.reset()
                 last_seen = now
 
             if det.get("seq", 0) != last_seq and now - det["t_arr"] < 1.0:
@@ -492,22 +542,14 @@ class Rig:
                 if now - last_seen > 1.0:  # face (re)appeared: drop stale filter state
                     f_yaw.reset()
                     f_pitch.reset()
-                    f_roll.reset()
-                last_seen = now
+                    last_seen = now
                 # Face direction = head pose when the frame was taken + the angle
                 # that brings the eye midpoint to the image centre.
-                f_r, f_p, f_y = euler(hist.at(det["t_arr"] - latency))
+                _, f_p, f_y = euler(hist.at(det["t_arr"] - latency))
                 g_yaw = f_y + (cx - det["u"]) / px_yaw
                 g_pitch = f_p + (cy - det["v"]) / px_pitch
                 goal_yaw = float(np.clip(f_yaw(g_yaw, det["t_arr"]), -YAW_LIMIT, YAW_LIMIT))
                 goal_pitch = float(np.clip(f_pitch(g_pitch, det["t_arr"]), -PITCH_LIMIT, PITCH_LIMIT))
-                # Head tilt: roll that makes the eye line level in the image (= the
-                # person's tilt, copied), from the roll the head had at that frame.
-                psi = det["eye_roll"]
-                psi_avg += 0.3 * (psi - psi_avg)
-                psi_d = math.copysign(max(0.0, abs(psi) - TILT_DEADZONE), psi)
-                raw = f_r - TILT_GAIN * psi_d / self.roll_k
-                goal_roll = float(np.clip(f_roll(raw, det["t_arr"]), -TILT_MAX, TILT_MAX))
                 nx, ny = (det["u"] - cx) / cx, (det["v"] - cy) / cy
                 avg_x += 0.35 * (nx - avg_x)
                 avg_y += 0.35 * (ny - avg_y)
@@ -525,18 +567,7 @@ class Rig:
                     target_yaw = target_pitch = 0.0
                 else:
                     target_yaw, target_pitch = gs_yaw, gs_pitch  # hold
-                target_roll = goal_roll if (face_here and self.follow_tilt) else 0.0
-                # Sign guard: saturated at the limit yet the eye line is still far from level
-                # means the roll is pushing the wrong way; flip the sign.
-                if face_here and abs(goal_roll) > 0.95 * TILT_MAX and abs(psi_avg) > TILT_RUNAWAY:
-                    sat_since = sat_since or now
-                    if now - sat_since > 2.0:
-                        self.roll_k = -self.roll_k
-                        f_roll.reset()
-                        sat_since = None
-                        print(f"Tilt sign flipped (roll_k={self.roll_k:+.0f})", flush=True)
-                else:
-                    sat_since = None
+                target_roll = track_roll if face_here else 0.0
                 omega, tau, vmax = OMEGA, GOAL_TAU, MAX_SPEED
             else:
                 target_yaw, target_pitch, target_roll = sg["yaw"], sg["pitch"], sg["roll"]
@@ -601,7 +632,6 @@ class Rig:
                     goal_err_pitch_deg=math.degrees(err_pitch),
                     cmd_yaw_deg=math.degrees(yaw), cmd_pitch_deg=math.degrees(pitch),
                     cmd_roll_deg=math.degrees(roll), cmd_body_deg=math.degrees(m_body),
-                    tilt_deg=math.degrees(goal_roll) if face_here else 0.0,
                     speed_deg_s=math.degrees(spd), still=bool(speed < STILL_SPEED),
                 )
 

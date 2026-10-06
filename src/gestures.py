@@ -88,6 +88,56 @@ class Gestures:
         self.move(yaw0, pitch0, 0, 0.6)  # back to looking at them (or straight ahead)
         self.rig.antennas()
 
+    def yeay(self) -> None:
+        """A short 'yeaay!': head up and bobbing around where it is looking, ears wide open
+        and flapping (~1.4 s). Leaves tracking off: the caller turns it back on."""
+        yaw0, pitch0, _ = self.rig.current_goal_deg()
+        self.flap(0.6, 0.65)
+        self.move(yaw0, pitch0 - 12, 10, 0.25)
+        self.flap(0.4, 0.65)
+        self.move(yaw0, pitch0 - 7, -10, 0.25)
+        self.move(yaw0, pitch0 - 12, 8, 0.25)
+        self.move(yaw0, pitch0, 0, 0.4)
+        self.rig.antennas()
+
+    def cute_ears(self) -> None:
+        """A random small ear movement, in the background (one at a time)."""
+        if getattr(self, "_ears_busy", False):
+            return
+        left, right = INIT_ANTENNAS_JOINT_POSITIONS
+        pattern = random.choice(("twitch", "flutter", "perk", "double_flap", "flutter", "twitch"))
+
+        def run() -> None:
+            self._ears_busy = True
+            try:
+                rig = self.rig
+                if pattern == "twitch":  # one ear flicks
+                    if random.random() < 0.5:
+                        rig.antennas(left=left - 0.45)
+                    else:
+                        rig.antennas(right=right + 0.45)
+                    time.sleep(0.35)
+                elif pattern == "flutter":  # ears alternate
+                    for i in range(4):
+                        a = 0.3 if i % 2 == 0 else -0.05
+                        b = -0.05 if i % 2 == 0 else 0.3
+                        rig.antennas(left=left - a, right=right + b)
+                        time.sleep(0.16)
+                elif pattern == "perk":  # both ears lean inward, hold, relax
+                    rig.antennas(left=left + 0.3, right=right - 0.3)
+                    time.sleep(0.9)
+                else:  # double_flap: both ears open twice
+                    for _ in range(2):
+                        rig.antennas(left=left - 0.4, right=right + 0.4)
+                        time.sleep(0.22)
+                        rig.antennas()
+                        time.sleep(0.18)
+                rig.antennas()
+            finally:
+                self._ears_busy = False
+
+        threading.Thread(target=run, daemon=True).start()
+
     def twitch(self) -> None:
         """A curious flick of one antenna."""
         left, right = INIT_ANTENNAS_JOINT_POSITIONS
