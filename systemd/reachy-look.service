@@ -9,6 +9,9 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 User=pollen
+# The head controller must win the CPU against everything else on the Pi (hand detection runs
+# in a child process niced to +10).
+Nice=-5
 ExecStartPre=/bin/bash -c 'for i in $(seq 90); do curl -sf http://localhost:8000/api/daemon/status >/dev/null && exit 0; sleep 1; done; exit 1'
 ExecStart=/venvs/apps_venv/bin/python -u /home/pollen/reachy-mini-demo/look_straight.py
 # SIGTERM -> the script folds into the sleep pose and releases the motors (~6 s).

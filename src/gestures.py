@@ -34,11 +34,18 @@ class Gestures:
         """Sleep; True if we should stop."""
         return self.stop.wait(seconds)
 
-    def move(self, yaw=None, pitch=None, roll=None, seconds: float = 1.0, wait: bool = True) -> None:
-        """Smooth scripted head move (degrees); quick moves get a stiffer spring."""
+    def move(self, yaw=None, pitch=None, roll=None, seconds: float = 1.0, wait: bool = True,
+             timed: bool = False) -> None:
+        """Smooth scripted head move (degrees); quick moves get a stiffer spring.
+
+        `wait` blocks until the head has arrived; `timed` blocks for exactly `seconds`
+        instead (for gestures, where the safety envelope may stop it from fully arriving).
+        """
         omega = min(max(4.5 / seconds, 2.0), 14.0)
         self.rig.look_deg(yaw, pitch, roll, omega=omega, tau=min(0.25, seconds / 4), vmax=FAST_SPEED)
-        if wait:
+        if timed:
+            self.wait(seconds)
+        elif wait:
             self.rig.wait_settled(timeout=seconds * 2 + 1.0, stop=self.stop)
 
     def look_forward(self, seconds: float = 1.0) -> None:
@@ -90,19 +97,18 @@ class Gestures:
 
     def yeay(self) -> None:
         """A short 'yeaay!': head up and bobbing around where it is looking, ears wide open
-        and flapping (~1.4 s). First the waist turns toward the person so the head is not
-        far ahead of it (that difference is what made the head bump the body). Leaves
-        tracking off: the caller turns it back on."""
-        yaw0, _, _ = self.rig.current_goal_deg()
-        self.rig.body_look_deg(yaw0)  # waist toward the person
-        self.rig.wait_waist_on_head(3.0)
+        and flapping (~1.4 s). At the same time the waist turns toward the person at twice
+        its usual speed, so the head is not left far ahead of it (that difference is what
+        made the head bump the body; the safety envelope also limits nod and tilt while
+        they are apart). Leaves tracking off: the caller turns it back on."""
         yaw0, pitch0, _ = self.rig.current_goal_deg()
+        self.rig.body_look_deg(yaw0, speed=2.0)  # waist starts turning now, in parallel
         self.flap(0.6, 0.65)
-        self.move(yaw0, pitch0 - 12, 10, 0.25)
+        self.move(yaw0, pitch0 - 12, 10, 0.25, timed=True)
         self.flap(0.4, 0.65)
-        self.move(yaw0, pitch0 - 7, -10, 0.25)
-        self.move(yaw0, pitch0 - 12, 8, 0.25)
-        self.move(yaw0, pitch0, 0, 0.4)
+        self.move(yaw0, pitch0 - 7, -10, 0.25, timed=True)
+        self.move(yaw0, pitch0 - 12, 8, 0.25, timed=True)
+        self.move(yaw0, pitch0, 0, 0.4, timed=True)
         self.rig.antennas()
         self.rig.body_center()  # waist drifts back gently
 

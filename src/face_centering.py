@@ -72,7 +72,7 @@ LOST_RECENTRE_S = 6.0  # then, after this long, look straight ahead
 WAVE_COOLDOWN_S = 6.0
 WAVE_MAX_HEAD_SPEED = 5.0  # deg/s; the camera must be still or the whole image moves
 # Open-hand trigger ("hello!"): an open hand held up near the face.
-HAND_PERIOD_S = 0.1  # pause between hand checks; one check takes ~0.2 s on the Pi
+HAND_PERIOD_S = 0.2  # pause between hand checks; one check takes ~0.2 s on the Pi
 HAND_FRAMES = 2  # consecutive detections with an open hand (~0.5 s hold)
 HAND_COOLDOWN_S = 6.0
 HAND_CROP_FACES = 6.0  # square crop side, in face widths, centred a bit below the face
@@ -212,6 +212,7 @@ class Rig:
         self.det_log: list | None = None  # filled during calibration
         self._track_roll = 0.0  # head roll (rad) while tracking: set by the demo's personality
         self.hand_seq = 0  # increments every time an open hand is shown
+        self.record: list | None = None  # if a list: every control tick appends (t, cmd yaw/pitch/roll/body, measured yaw/pitch/roll/body)
         self._hand_vis: dict | None = None  # last hand seen (for the live view)
         self._latest: tuple | None = None  # (t, frame, face bbox in full-res pixels) for the hand thread
         self._tracking = False
@@ -221,6 +222,7 @@ class Rig:
         self._ant = list(INIT_ANTENNAS_JOINT_POSITIONS)
         self._body_manual = False  # False: waist drifts back to centre; True: follows _body_goal
         self._body_goal = 0.0
+        self._body_speed = 1.0  # waist speed factor (1 = gentle default)
         self._cur = (0.0, 0.0, 0.0)  # smoothed goal now (yaw, pitch, roll); written by the controller
         self._settled = False
         self._threads: list[threading.Thread] = []
@@ -236,7 +238,7 @@ class Rig:
 
     # ------------------------------------------------------------------ public API
 
-    def start(self, controller: bool = True) -> None:
+    def start(self, controller: bool = True, hand: bool = True) -> None:
         """Start the web view and detector; `controller=False` for calibration."""
         handler = self._make_handler()
         server = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
@@ -246,11 +248,15 @@ class Rig:
         self._spawn(self._detector_loop)
         if controller:
             self._spawn(self._control_loop)
-            self._spawn(self._hand_loop)
+            if hand:
+                self._spawn(self._hand_loop)
 
     def stop(self) -> None:
         """Stop the detector and controller threads (before parking the robot)."""
         self.stop_event.set()
+        proc = getattr(self, "_hand_proc", None)
+        if proc is not None and proc.poll() is None:
+            proc.kill()  # unblocks the hand thread
         for t in self._threads:
             if t.name != "serve_forever":
                 t.join(timeout=2.0)
@@ -295,10 +301,12 @@ class Rig:
         with self.lock:
             self._track_roll = max(-ROLL_LIMIT, min(ROLL_LIMIT, math.radians(deg)))
 
-    def body_look_deg(self, yaw: float) -> None:
-        """Turn the waist to `yaw` degrees (slowly, +yaw = robot's left); the head follows
-        only if you also `look()`. Stays until `body_center()`."""
+    def body_look_deg(self, yaw: float, speed: float = 1.0) -> None:
+        """Turn the waist to `yaw` degrees (+yaw = robot's left); `speed` scales how fast
+        (1 = gentle, 2 = twice as fast). The head follows only if you also `look()`.
+        Stays until `body_center()`."""
         with self.lock:
+            self._body_speed = speed
             self._body_manual = True
             self._body_goal = max(-BODY_LIMIT, min(BODY_LIMIT, math.radians(yaw)))
 
@@ -306,6 +314,7 @@ class Rig:
         """Waist back towards centre (never leaving the head more than 50 deg ahead of it)."""
         with self.lock:
             self._body_manual = False
+            self._body_speed = 1.0
 
     def antennas(self, left: float | None = None, right: float | None = None) -> None:
         """Antenna goals in radians; None = rest pose for that antenna."""
@@ -482,16 +491,27 @@ class Rig:
                         self._jpeg = buf.tobytes()
 
     def _hand_loop(self) -> None:
-        """Look for an open hand in a crop around the face (runs on the robot, ~5 fps)."""
+        """Look for an open hand in a crop around the face, in a separate low-priority
+        process (see hand_worker.py), so it cannot stall the head controller."""
         import hand_detector
-        model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        import struct
+        import subprocess
+        import sys
+        here = os.path.dirname(os.path.abspath(__file__))
+        model_dir = os.path.join(here, "models")
         if not hand_detector.available(model_dir):
             print(f"Hand models not found in {model_dir}: open-hand trigger disabled "
                   f"(run scripts/get_models.sh, then scripts/install.sh).", flush=True)
             return
-        det = hand_detector.OpenHandDetector(model_dir)
+        proc = subprocess.Popen([sys.executable, "-u", os.path.join(here, "hand_worker.py"), model_dir],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self._hand_proc = proc
+        if proc.stdout.readline().strip() != b"ready":
+            print("Hand worker failed to start: open-hand trigger disabled.", flush=True)
+            return
+        send = 384  # crops are sent at this size (the palm detector looks at 192 px anyway)
         open_frames, last_trigger, last_t = 0, -1e9, 0.0
-        while not self.stop_event.is_set():
+        while not self.stop_event.is_set() and proc.poll() is None:
             time.sleep(HAND_PERIOD_S)
             with self.lock:
                 latest = self._latest
@@ -503,24 +523,34 @@ class Rig:
             side = int(min(h, max(300.0, HAND_CROP_FACES * bw)))
             x0 = int(min(max(bx + bw / 2 - side / 2, 0), w - side))
             y0 = int(min(max(by + bh / 2 + 0.5 * bh - side / 2, 0), h - side))
-            res = det.detect(np.ascontiguousarray(frame[y0:y0 + side, x0:x0 + side]))
+            crop = cv2.resize(frame[y0:y0 + side, x0:x0 + side], (send, send), interpolation=cv2.INTER_AREA)
+            try:
+                proc.stdin.write(struct.pack("<II", send, send) + crop.tobytes())
+                proc.stdin.flush()
+                reply = json.loads(proc.stdout.readline())
+            except (BrokenPipeError, ValueError, OSError):
+                break
             now = time.monotonic()
-            if res is None:
+            if reply is None:
                 open_frames = 0
                 with self.lock:
                     self.state.update(hand="", hand_open_frames=0)
                 continue
-            open_frames = open_frames + 1 if res["open"] else 0
-            lm = None if res["landmarks"] is None else res["landmarks"] + [x0, y0]
-            x1, y1, x2, y2 = (res["bbox"] + [x0, y0, x0, y0]).tolist()
+            k = side / send  # back to full-resolution frame pixels
+            is_open = reply["open"]
+            open_frames = open_frames + 1 if is_open else 0
+            lm = None if reply["landmarks"] is None else np.array(reply["landmarks"]) * k + [x0, y0]
+            x1, y1, x2, y2 = (np.array(reply["bbox"]) * k + [x0, y0, x0, y0]).tolist()
             with self.lock:
-                self._hand_vis = {"t": now, "bbox": (x1, y1, x2, y2), "open": res["open"], "landmarks": lm}
-                self.state.update(hand="open" if res["open"] else "closed", hand_open_frames=open_frames)
+                self._hand_vis = {"t": now, "bbox": (x1, y1, x2, y2), "open": is_open, "landmarks": lm}
+                self.state.update(hand="open" if is_open else "closed", hand_open_frames=open_frames)
             if open_frames >= HAND_FRAMES and now - last_trigger > HAND_COOLDOWN_S:
                 last_trigger, open_frames = now, 0
                 with self.lock:
                     self.hand_seq += 1
                 print("Open hand detected!", flush=True)
+        if proc.poll() is None:
+            proc.kill()
 
     def _control_loop(self) -> None:
         mini, hist, cal = self.mini, self.hist, self.cal
@@ -545,11 +575,15 @@ class Rig:
         avg_x = avg_y = 0.0
         recent: collections.deque = collections.deque(maxlen=20)
         last_seq, last_seen = 0, 0.0
-        dt = 1.0 / CONTROL_HZ
-        next_tick = time.monotonic()
+        dt = 1.0 / CONTROL_HZ  # the tick period (scheduling)
+        next_tick = last_loop = time.monotonic()
 
         while not self.stop_event.is_set():
             now = time.monotonic()
+            # Integrate with the real time since the last tick (clamped), so a late tick makes
+            # the motion wait a little instead of jolting forward.
+            h = min(max(now - last_loop, 0.005), 0.06)
+            last_loop = now
             T_now = mini.get_current_head_pose()
             hist.add(now, T_now)
             m_roll, m_pitch, m_yaw = euler(T_now)
@@ -565,7 +599,7 @@ class Rig:
                 edge, self._track_edge = self._track_edge, False
                 sg = dict(self._goal)
                 ant_goal = list(self._ant)
-                body_manual, body_goal = self._body_manual, self._body_goal
+                body_manual, body_goal, body_speed = self._body_manual, self._body_goal, self._body_speed
                 track_roll = self._track_roll
 
             if edge:  # tracking just switched on: start from where we are, with a grace period
@@ -614,7 +648,7 @@ class Rig:
             # Stage 1: first-order smoothing of the goal (removes steps -> continuous
             # acceleration). Stage 2: critically damped spring on the *measured* pose;
             # the command just integrates its velocity.
-            a_goal = 1.0 - math.exp(-dt / tau)
+            a_goal = 1.0 - math.exp(-h / tau)
             gs_yaw += a_goal * (target_yaw - gs_yaw)
             gs_pitch += a_goal * (target_pitch - gs_pitch)
             gs_roll += a_goal * (target_roll - gs_roll)
@@ -624,29 +658,32 @@ class Rig:
             for ax, lim in zip(axes, limits):
                 cmd, vel, meas, goal = ax
                 acc = omega * omega * (goal - meas) - 2.0 * omega * vel
-                vel = float(np.clip(vel + acc * dt, -vmax, vmax))
-                ax[0] = float(np.clip(cmd + vel * dt, -lim, lim))
+                vel = float(np.clip(vel + acc * h, -vmax, vmax))
+                ax[0] = float(np.clip(cmd + vel * h, -lim, lim))
                 ax[1] = vel
             (yaw, vyaw, _, _), (pitch, vpitch, _, _), (roll, vroll, _, _) = axes
             yaw, pitch, roll = limit_pose(yaw, pitch, roll, m_body)  # never leave the safe envelope
 
-            a_ant = 1.0 - math.exp(-dt / ANTENNA_TAU)
+            a_ant = 1.0 - math.exp(-h / ANTENNA_TAU)
             ant = [a + a_ant * (g - a) for a, g in zip(ant, ant_goal)]
 
             # Waist: slow spring on the measured waist angle. Centre mode drifts back to 0
             # but never lets the head get more than BODY_CENTER_DELTA ahead of it.
             body_target = body_goal if body_manual else float(
                 np.clip(0.0, m_yaw - BODY_CENTER_DELTA, m_yaw + BODY_CENTER_DELTA))
-            gs_body += (1.0 - math.exp(-dt / 0.3)) * (body_target - gs_body)
-            acc = BODY_OMEGA * BODY_OMEGA * (gs_body - m_body) - 2.0 * BODY_OMEGA * vbody
-            vbody = float(np.clip(vbody + acc * dt, -BODY_MAX_SPEED, BODY_MAX_SPEED))
-            body_cmd = float(np.clip(body_cmd + vbody * dt, -BODY_LIMIT, BODY_LIMIT))
+            gs_body += (1.0 - math.exp(-h / 0.3)) * (body_target - gs_body)  # soft start stays at 0.3 s even when faster
+            w_b = BODY_OMEGA * body_speed
+            acc = w_b * w_b * (gs_body - m_body) - 2.0 * w_b * vbody
+            vbody = float(np.clip(vbody + acc * h, -BODY_MAX_SPEED * body_speed, BODY_MAX_SPEED * body_speed))
+            body_cmd = float(np.clip(body_cmd + vbody * h, -BODY_LIMIT, BODY_LIMIT))
 
             mini.set_target(
                 head=create_head_pose(roll=roll, pitch=pitch, yaw=yaw, degrees=False, mm=False),
                 antennas=ant,
                 body_yaw=body_cmd,
             )
+            if self.record is not None:
+                self.record.append((time.monotonic(), yaw, pitch, roll, body_cmd, m_yaw, m_pitch, m_roll, m_body))
 
             err_yaw, err_pitch = gs_yaw - m_yaw, gs_pitch - m_pitch
             spd = math.hypot(vyaw, vpitch)
