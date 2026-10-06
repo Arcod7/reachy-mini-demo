@@ -104,10 +104,10 @@ scripts/install.sh                                                              
 ## Safety envelope
 
 Everything sent to the head (tracking, tilts, gestures, the search, the companion) goes through
-`limit_pose()` in `src/face_centering.py` so the head cannot hit its own body: head yaw at most 45 deg
-from the waist and 75 deg overall; pitch within +/-28 deg and roll within +/-15 deg *together* (an
-ellipse: a big tilt leaves less room for a big nod), shrinking by up to 40% when the head is turned
-far from the waist. The waist (body yaw, +/-100 deg) moves slowly. Tune the constants at the top of
+`limit_pose()` in `src/face_centering.py` so the head cannot hit its own body: head yaw at most 35 deg
+from the waist and 75 deg overall; pitch within +/-24 deg and roll within +/-12 deg *together* (an
+ellipse: a big tilt leaves less room for a big nod), shrinking by up to 50% when the head is turned
+more than 15 deg from the waist. The waist (body yaw, +/-100 deg) moves slowly. Tune the constants at the top of
 that file if you want it tighter.
 
 ## Troubleshooting

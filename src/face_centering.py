@@ -56,12 +56,13 @@ GOAL_TAU = 0.25  # first-order smoothing of the goal before the spring (s)
 MAX_SPEED = math.radians(40)
 YAW_LIMIT = math.radians(75)  # head yaw in the world frame (also kept within HEAD_BODY_DELTA of the waist)
 BODY_LIMIT = math.radians(100)
-HEAD_BODY_DELTA = math.radians(45)  # head yaw relative to the waist (the SDK allows 65)
-BODY_CENTER_DELTA = math.radians(35)  # while tracking the waist drifts back to 0, but never further than this behind the head
+HEAD_BODY_DELTA = math.radians(35)  # head yaw relative to the waist (the SDK allows 65)
+SHRINK_START = math.radians(15)  # beyond this turn from the waist, pitch/roll room shrinks (down to 50%)
+BODY_CENTER_DELTA = math.radians(25)  # while tracking the waist drifts back to 0, but never further than this behind the head
 BODY_OMEGA = 1.5  # waist spring (rad/s): slow and gentle
 BODY_MAX_SPEED = math.radians(35)
-PITCH_LIMIT = math.radians(28)
-ROLL_LIMIT = math.radians(15)
+PITCH_LIMIT = math.radians(24)
+ROLL_LIMIT = math.radians(12)
 ANTENNA_TAU = 0.06  # antenna smoothing (s)
 FILTER_MIN_CUTOFF = 0.6  # Hz, when the face is still (kills detector jitter)
 FILTER_BETA = 12.0  # cutoff rise per rad/s of face motion (keeps up when you move)
@@ -178,7 +179,7 @@ def limit_pose(yaw: float, pitch: float, roll: float, body: float) -> tuple[floa
     yaw = float(np.clip(yaw, body - HEAD_BODY_DELTA, body + HEAD_BODY_DELTA))
     yaw = float(np.clip(yaw, -YAW_LIMIT, YAW_LIMIT))
     turn = abs(yaw - body)
-    shrink = 1.0 - 0.4 * max(0.0, (turn - math.radians(25)) / (HEAD_BODY_DELTA - math.radians(25)))
+    shrink = 1.0 - 0.5 * max(0.0, (turn - SHRINK_START) / (HEAD_BODY_DELTA - SHRINK_START))
     p_max, r_max = PITCH_LIMIT * shrink, ROLL_LIMIT * shrink
     k = math.hypot(pitch / p_max, roll / r_max)
     if k > 1.0:
