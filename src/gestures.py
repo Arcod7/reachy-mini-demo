@@ -13,7 +13,7 @@ from reachy_mini.reachy_mini import INIT_ANTENNAS_JOINT_POSITIONS
 
 from face_centering import Rig
 
-FAST_SPEED = math.radians(110)  # for quick gestures
+FAST_SPEED = math.radians(150)  # for quick gestures
 
 # The original companion's emotion choreography: (yaw, up, roll, seconds), angles in
 # radians. +yaw = robot's left, +up = looks up.
@@ -90,15 +90,21 @@ class Gestures:
 
     def yeay(self) -> None:
         """A short 'yeaay!': head up and bobbing around where it is looking, ears wide open
-        and flapping (~1.4 s). Leaves tracking off: the caller turns it back on."""
+        and flapping (~1.4 s). First the waist turns toward the person so the head is not
+        far ahead of it (that difference is what made the head bump the body). Leaves
+        tracking off: the caller turns it back on."""
+        yaw0, _, _ = self.rig.current_goal_deg()
+        self.rig.body_look_deg(yaw0)  # waist toward the person
+        self.rig.wait_waist_on_head(3.0)
         yaw0, pitch0, _ = self.rig.current_goal_deg()
         self.flap(0.6, 0.65)
-        self.move(yaw0, pitch0 - 12, 8, 0.25)
+        self.move(yaw0, pitch0 - 12, 10, 0.25)
         self.flap(0.4, 0.65)
-        self.move(yaw0, pitch0 - 7, -8, 0.25)
-        self.move(yaw0, pitch0 - 12, 6, 0.25)
+        self.move(yaw0, pitch0 - 7, -10, 0.25)
+        self.move(yaw0, pitch0 - 12, 8, 0.25)
         self.move(yaw0, pitch0, 0, 0.4)
         self.rig.antennas()
+        self.rig.body_center()  # waist drifts back gently
 
     def cute_ears(self) -> None:
         """A random small ear movement, in the background (one at a time)."""

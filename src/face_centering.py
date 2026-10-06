@@ -230,7 +230,7 @@ class Rig:
             "err_x": 0.0, "err_y": 0.0, "err_x_avg": 0.0, "err_y_avg": 0.0,
             "err_rms": 0.0, "within_tol": False, "tolerance": TOLERANCE,
             "goal_err_yaw_deg": 0.0, "goal_err_pitch_deg": 0.0,
-            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0, "hand": "", "hand_open_frames": 0,
+            "cmd_yaw_deg": 0.0, "cmd_pitch_deg": 0.0, "cmd_roll_deg": 0.0, "cmd_body_deg": 0.0, "head_waist_deg": 0.0, "hand": "", "hand_open_frames": 0,
             "speed_deg_s": 0.0, "still": False,
         }
 
@@ -330,6 +330,16 @@ class Rig:
         """Where the (smoothed) head goal is now, in degrees: (yaw, pitch, roll)."""
         with self.lock:
             return tuple(math.degrees(v) for v in self._cur)
+
+    def wait_waist_on_head(self, timeout: float = 3.0, tol_deg: float = 4.0) -> bool:
+        """Block until the waist has turned to line up with the head (or timeout)."""
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout and not self.stop_event.is_set():
+            with self.lock:
+                if abs(self.state["head_waist_deg"]) < tol_deg:
+                    return True
+            time.sleep(0.05)
+        return False
 
     def wait_on_target(self, timeout: float = 1.5) -> bool:
         """While tracking: block until the head has settled on the face (or timeout)."""
@@ -655,7 +665,7 @@ class Rig:
                     goal_err_yaw_deg=math.degrees(err_yaw),
                     goal_err_pitch_deg=math.degrees(err_pitch),
                     cmd_yaw_deg=math.degrees(yaw), cmd_pitch_deg=math.degrees(pitch),
-                    cmd_roll_deg=math.degrees(roll), cmd_body_deg=math.degrees(m_body),
+                    cmd_roll_deg=math.degrees(roll), cmd_body_deg=math.degrees(m_body), head_waist_deg=math.degrees(m_yaw - m_body),
                     speed_deg_s=math.degrees(spd), still=bool(speed < STILL_SPEED),
                 )
 
