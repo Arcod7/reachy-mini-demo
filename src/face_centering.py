@@ -58,7 +58,8 @@ YAW_LIMIT = math.radians(75)  # head yaw in the world frame (also kept within HE
 BODY_LIMIT = math.radians(100)
 HEAD_BODY_DELTA = math.radians(35)  # head yaw relative to the waist (the SDK allows 65)
 SHRINK_START = math.radians(15)  # beyond this turn from the waist, pitch/roll room shrinks (down to 50%)
-BODY_CENTER_DELTA = math.radians(25)  # while tracking the waist drifts back to 0, but never further than this behind the head
+BODY_FOLLOW_DELTA = math.radians(10)  # the waist stays put while the head is within this of it, else it follows
+BODY_FAST = 3.5  # waist speed factor right after boost (the open-hand reaction)
 BODY_OMEGA = 1.5  # waist spring (rad/s): slow and gentle
 BODY_MAX_SPEED = math.radians(35)
 PITCH_LIMIT = math.radians(24)
@@ -220,9 +221,7 @@ class Rig:
         self._goal = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "omega": OMEGA,
                       "tau": GOAL_TAU, "vmax": MAX_SPEED}
         self._ant = list(INIT_ANTENNAS_JOINT_POSITIONS)
-        self._body_manual = False  # False: waist drifts back to centre; True: follows _body_goal
-        self._body_goal = 0.0
-        self._body_speed = 1.0  # waist speed factor (1 = gentle default)
+        self._body_fast_until = 0.0  # until then the waist follows the head tightly and fast
         self._cur = (0.0, 0.0, 0.0)  # smoothed goal now (yaw, pitch, roll); written by the controller
         self._settled = False
         self._threads: list[threading.Thread] = []
@@ -301,20 +300,10 @@ class Rig:
         with self.lock:
             self._track_roll = max(-ROLL_LIMIT, min(ROLL_LIMIT, math.radians(deg)))
 
-    def body_look_deg(self, yaw: float, speed: float = 1.0) -> None:
-        """Turn the waist to `yaw` degrees (+yaw = robot's left); `speed` scales how fast
-        (1 = gentle, 2 = twice as fast). The head follows only if you also `look()`.
-        Stays until `body_center()`."""
+    def body_boost(self, seconds: float = 1.5) -> None:
+        """Turn the waist onto the head quickly (it normally follows lazily, 10 deg behind)."""
         with self.lock:
-            self._body_speed = speed
-            self._body_manual = True
-            self._body_goal = max(-BODY_LIMIT, min(BODY_LIMIT, math.radians(yaw)))
-
-    def body_center(self) -> None:
-        """Waist back towards centre (never leaving the head more than 50 deg ahead of it)."""
-        with self.lock:
-            self._body_manual = False
-            self._body_speed = 1.0
+            self._body_fast_until = time.monotonic() + seconds
 
     def antennas(self, left: float | None = None, right: float | None = None) -> None:
         """Antenna goals in radians; None = rest pose for that antenna."""
@@ -599,7 +588,7 @@ class Rig:
                 edge, self._track_edge = self._track_edge, False
                 sg = dict(self._goal)
                 ant_goal = list(self._ant)
-                body_manual, body_goal, body_speed = self._body_manual, self._body_goal, self._body_speed
+                body_fast = now < self._body_fast_until
                 track_roll = self._track_roll
 
             if edge:  # tracking just switched on: start from where we are, with a grace period
@@ -667,11 +656,13 @@ class Rig:
             a_ant = 1.0 - math.exp(-h / ANTENNA_TAU)
             ant = [a + a_ant * (g - a) for a, g in zip(ant, ant_goal)]
 
-            # Waist: slow spring on the measured waist angle. Centre mode drifts back to 0
-            # but never lets the head get more than BODY_CENTER_DELTA ahead of it.
-            body_target = body_goal if body_manual else float(
-                np.clip(0.0, m_yaw - BODY_CENTER_DELTA, m_yaw + BODY_CENTER_DELTA))
-            gs_body += (1.0 - math.exp(-h / 0.3)) * (body_target - gs_body)  # soft start stays at 0.3 s even when faster
+            # Waist: it follows the head. It stays still while the head is within BODY_FOLLOW_DELTA
+            # of it (and never drifts back to the front); after body_boost() it turns onto the head
+            # quickly and tightly. Slow spring on the measured waist angle.
+            reach = 0.0 if body_fast else BODY_FOLLOW_DELTA
+            body_speed = BODY_FAST if body_fast else 1.0
+            body_target = float(np.clip(m_body, m_yaw - reach, m_yaw + reach))
+            gs_body += (1.0 - math.exp(-h / 0.3)) * (body_target - gs_body)  # soft start
             w_b = BODY_OMEGA * body_speed
             acc = w_b * w_b * (gs_body - m_body) - 2.0 * w_b * vbody
             vbody = float(np.clip(vbody + acc * h, -BODY_MAX_SPEED * body_speed, BODY_MAX_SPEED * body_speed))

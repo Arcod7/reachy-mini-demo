@@ -39,14 +39,14 @@ Personality on top of the tracking (disable all of it with `--no-reactions`):
 - mostly looks straight at the nearest person; every ~8-18 s it tilts its head left or right
   (9-14 deg) for 2-4 s, then straightens up;
 - random small ear movements (twitch, flutter, perk, double flap) every ~5-12 s;
-- if you hold up an open hand: a short "yeaay!" (head up and bobbing, ears wide open, ~1.4 s).
+- if you hold up an open hand: a short "yeaay!" (head up and bobbing, ears wide open, ~1.2 s) while the
+  waist turns onto the head at 3.5x speed, so it has arrived before the gesture ends;
   A real hand detector runs on the robot (MediaPipe palm + 21 hand landmarks, OpenCV Zoo ONNX models
   in `models/`, fetched by `scripts/get_models.sh`): the hand must have index, middle, ring and pinky
   extended for ~0.5 s, 6 s cooldown. The live view outlines the hand and its landmarks. It costs about
   0.2 s of one core per check on the Pi; constants at the top of `src/face_centering.py`;
-- when the person leaves (2 s) the ears droop (ears only), then it looks around slowly for ~9 s with
-  its waist (the head follows, +/-65 deg) and the waist drifts back to centre; with nobody around it
-  twitches an antenna now and then.
+- when the person leaves (2 s) the ears droop (ears only), then it looks around slowly for ~11 s
+  (+/-45 deg, the waist follows the head); with nobody around it twitches an antenna now and then.
 Timings are constants at the top of `src/look_straight.py`; the gestures live in `src/gestures.py`.
 
 Live view and tracking state: <http://reachy-mini.local:8080> (camera with the centre
@@ -100,6 +100,13 @@ scripts/install.sh                                                              
 
 `--engine espeak` is a no-model fallback (robotic). Speaker volume:
 `POST /api/volume/set {"volume": 100}` on the robot (it was 67).
+
+## Waist
+
+One rule: the waist follows the head. It stays still while the head is within 10 deg of it, otherwise it
+turns just enough to keep up, and it never drifts back to the front by itself (when nobody is around the
+head goes back to the front and the waist follows). `rig.body_boost()` makes it turn onto the head quickly
+and tightly for a moment (open-hand reaction, search). Constants: `BODY_FOLLOW_DELTA`, `BODY_FAST`.
 
 ## Safety envelope
 

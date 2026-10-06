@@ -102,7 +102,7 @@ class Gestures:
         made the head bump the body; the safety envelope also limits nod and tilt while
         they are apart). Leaves tracking off: the caller turns it back on."""
         yaw0, pitch0, _ = self.rig.current_goal_deg()
-        self.rig.body_look_deg(yaw0, speed=2.0)  # waist starts turning now, in parallel
+        self.rig.body_boost()  # the waist turns onto the head now, in parallel and faster than the gesture
         self.flap(0.6, 0.65)
         self.move(yaw0, pitch0 - 12, 10, 0.25, timed=True)
         self.flap(0.4, 0.65)
@@ -110,7 +110,6 @@ class Gestures:
         self.move(yaw0, pitch0 - 12, 8, 0.25, timed=True)
         self.move(yaw0, pitch0, 0, 0.4, timed=True)
         self.rig.antennas()
-        self.rig.body_center()  # waist drifts back gently
 
     def cute_ears(self) -> None:
         """A random small ear movement, in the background (one at a time)."""
@@ -166,17 +165,17 @@ class Gestures:
         self.rig.antennas(left=left - 0.8, right=right + 0.8)
         self.wait(seconds)
 
-    def search(self, seconds: float = 9.0) -> bool:
-        """Slow look-around with the waist, the head following it (like a patrol).
-        True as soon as a face shows up. The caller restores tracking / the waist."""
+    def search(self, seconds: float = 11.0) -> bool:
+        """Slow look-around (like a patrol); the waist follows the head. True as soon as a
+        face shows up. The caller restores tracking."""
         end, side = time.monotonic() + seconds, 1
         next_sweep = 0.0
         while time.monotonic() < end and not self.stop.is_set():
             if self.rig.face() is not None:
                 return True
             if time.monotonic() >= next_sweep:
-                self.rig.body_look_deg(65 * side)  # waist
-                self.rig.look_deg(65 * side, -3, 0, omega=1.6, tau=0.4)  # head follows
-                side, next_sweep = -side, time.monotonic() + 4.5
+                self.rig.body_boost(5.0)  # the waist keeps right under the head while it sweeps
+                self.rig.look_deg(45 * side, -3, 0, omega=1.6, tau=0.4)
+                side, next_sweep = -side, time.monotonic() + 5.5
             self.wait(0.1)
         return False

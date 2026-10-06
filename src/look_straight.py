@@ -96,9 +96,8 @@ def presence_loop(rig: Rig) -> None:
                 print("Person left: looking for them...", flush=True)
                 g.droop()
                 found = g.search()
-                rig.body_center()  # waist back to centre (gently)
                 if not found:
-                    g.look_forward(2.0)
+                    g.look_forward(2.0)  # nobody: head to the front, the waist follows
                 rig.set_tracking(True)
                 g.rig.antennas()
                 state = "idle"
