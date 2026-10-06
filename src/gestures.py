@@ -63,16 +63,29 @@ class Gestures:
             self.wait(0.1)
         self.rig.antennas()
 
-    def animate_excitement(self) -> None:
-        """Three quick head wiggles with an antenna flap each."""
+    def animate_excitement(self, toward_face: bool = False) -> None:
+        """Three quick head wiggles with an antenna flap each.
+
+        Absolute by default (around straight ahead, as in the original). With
+        `toward_face` the wiggle is around where the head is *now* (the person it is
+        tracking): it waits until the head has settled on them, wiggles around that
+        direction, and ends looking at them.
+        """
+        if toward_face:
+            self.rig.wait_on_target()
+            yaw0, pitch0, _ = self.rig.current_goal_deg()
+            wiggles = ((0, 0), (14, -5), (-14, -5))
+        else:
+            yaw0 = pitch0 = 0.0
+            wiggles = ((0, 0), (20, -8), (-20, -8))
         for _ in range(3):
-            for yaw, pitch in ((0, 0), (20, -8), (-20, -8)):
+            for dyaw, dpitch in wiggles:
                 if self.stop.is_set():
                     return
                 self.flap(0.3, 0.4)
-                self.move(yaw, pitch, 0, 0.3)
+                self.move(yaw0 + dyaw, pitch0 + dpitch, 0, 0.3)
                 self.wait(0.05)
-        self.look_forward(0.6)
+        self.move(yaw0, pitch0, 0, 0.6)  # back to looking at them (or straight ahead)
         self.rig.antennas()
 
     def twitch(self) -> None:

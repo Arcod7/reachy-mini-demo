@@ -270,6 +270,22 @@ class Rig:
             time.sleep(0.03)
         return False
 
+    def current_goal_deg(self) -> tuple[float, float, float]:
+        """Where the (smoothed) head goal is now, in degrees: (yaw, pitch, roll)."""
+        with self.lock:
+            return tuple(math.degrees(v) for v in self._cur)
+
+    def wait_on_target(self, timeout: float = 1.5) -> bool:
+        """While tracking: block until the head has settled on the face (or timeout)."""
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout and not self.stop_event.is_set():
+            with self.lock:
+                if self.state["detected"] and self.state["still"] and \
+                        abs(self.state["goal_err_yaw_deg"]) < 2.0 and abs(self.state["goal_err_pitch_deg"]) < 2.0:
+                    return True
+            time.sleep(0.05)
+        return False
+
     def face(self) -> dict | None:
         """Newest face (< HOLD_S old): {"u","v" px, "area_frac", "age"} or None."""
         with self.lock:

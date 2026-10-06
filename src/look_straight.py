@@ -64,7 +64,7 @@ def presence_loop(rig: Rig) -> None:
             if state != "tracking" and now - first_seen >= PRESENT_S:
                 if absent >= ARRIVE_MIN_ABSENCE_S and now - last_gesture > ARRIVE_COOLDOWN_S:
                     print("Someone arrived: excitement!", flush=True)
-                    g.animate_excitement()
+                    g.animate_excitement(toward_face=True)
                     last_gesture = time.monotonic()
                 rig.set_tracking(True)  # calm eye contact, antennas still
                 state = "tracking"
