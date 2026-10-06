@@ -70,8 +70,10 @@ HOLD_S = 0.8  # keep the last goal this long when the face vanishes
 LOST_RECENTRE_S = 6.0  # then, after this long, look straight ahead
 # Wave detection (motion next to the face, swinging left-right a few times).
 WAVE_WINDOW_S = 1.6
-WAVE_MIN_SWING = 0.07  # centroid swing, fraction of the image width
-WAVE_MIN_REVERSALS = 3
+WAVE_MIN_SWING = 0.10  # total centroid swing, fraction of the image width
+WAVE_STROKE = 0.035  # each left/right stroke must cover at least this (jitter must not count)
+WAVE_MIN_REVERSALS = 3  # R-L-R-L
+WAVE_MAX_AREA = 0.08  # motion blob (fraction of the frame): a hand, not the whole scene
 WAVE_COOLDOWN_S = 6.0
 WAVE_MAX_HEAD_SPEED = 5.0  # deg/s; the camera must be still or the whole image moves
 TOLERANCE = 0.01  # target accuracy (normalised image units; 1 = half the image)
@@ -193,6 +195,7 @@ class Rig:
         self.det_log: list | None = None  # filled during calibration
         self._track_roll = 0.0  # head roll (rad) while tracking: set by the demo's personality
         self.wave_seq = 0  # increments on every detected wave
+        self._blackout_until = 0.0  # no wave detection until then (the robot is moving itself)
         self._tracking = False
         self._track_edge = False
         self._goal = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "omega": OMEGA,
@@ -268,8 +271,14 @@ class Rig:
         self.look(None if yaw is None else r(yaw), None if pitch is None else r(pitch),
                   None if roll is None else r(roll), **kw)
 
+    def motion_blackout(self, seconds: float) -> None:
+        """The robot is about to move itself (tilt, ears): ignore image motion for a while."""
+        with self.lock:
+            self._blackout_until = max(self._blackout_until, time.monotonic() + seconds)
+
     def set_tilt_deg(self, deg: float) -> None:
         """Head roll to hold while tracking (the robot's own cute tilt); 0 = straight."""
+        self.motion_blackout(2.0)  # the whole image rotates while it tilts
         with self.lock:
             self._track_roll = max(-ROLL_LIMIT, min(ROLL_LIMIT, math.radians(deg)))
 
@@ -390,7 +399,7 @@ class Rig:
         seq, n, fps_t, fps_n = 0, 0, time.monotonic(), 0
         prev_gray = None
         motion: collections.deque = collections.deque()  # (t, centroid x in [0,1])
-        last_wave, wave_score, motion_pt = -1e9, 0.0, None
+        last_wave, wave_score, motion_pt, wave_area = -1e9, 0.0, None, 0.0
         while not self.stop_event.is_set():
             frame = self.mini.media.get_frame()
             t_arr = time.monotonic()
@@ -412,18 +421,24 @@ class Rig:
             motion_pt = None
             with self.lock:
                 head_speed = self.state["speed_deg_s"]
-            if prev_gray is not None and face is not None and head_speed < WAVE_MAX_HEAD_SPEED:
-                mask = cv2.absdiff(gray, prev_gray) > 22
+                blackout = t_arr < self._blackout_until
+            if prev_gray is not None and face is not None and head_speed < WAVE_MAX_HEAD_SPEED \
+                    and not blackout:
+                mask = cv2.absdiff(gray, prev_gray) > 28
                 sx, sy = 96 / size[0], 54 / size[1]
                 bx, by, bw, bh = face.bbox  # ignore the face itself (and a margin around it)
                 x0, x1 = int((bx - 0.25 * bw) * sx), int((bx + 1.25 * bw) * sx)
                 y0, y1 = int((by - 0.25 * bh) * sy), int((by + 1.4 * bh) * sy)
                 mask[max(0, y0):y1, max(0, x0):x1] = False
                 frac = float(mask.mean())
-                if 0.004 < frac < 0.18:  # a hand-sized blob, not the whole scene
+                if 0.004 < frac < WAVE_MAX_AREA:  # a hand-sized blob, not the whole scene
                     ys, xs = np.nonzero(mask)
-                    motion.append((t_arr, float(xs.mean()) / 96))
-                    motion_pt = (float(xs.mean()) / 96, float(ys.mean()) / 54)
+                    cy_ = float(ys.mean())
+                    # a waving hand is around face height: between above the head and the chest
+                    if (by - 0.5 * bh) * sy <= cy_ <= (by + 3.0 * bh) * sy:
+                        motion.append((t_arr, float(xs.mean()) / 96))
+                        motion_pt = (float(xs.mean()) / 96, cy_ / 54)
+                        wave_area = frac
             else:
                 motion.clear()
             prev_gray = gray
@@ -431,12 +446,18 @@ class Rig:
                 motion.popleft()
             wave_score = 0.0
             if len(motion) >= 7:
-                xs_ = np.array([m[1] for m in motion])
-                xs_ = np.convolve(xs_, np.ones(3) / 3, mode="valid")
-                d = np.diff(xs_)
-                moves = d[np.abs(d) > 0.004]  # ignore jitter
-                signs = np.sign(moves)
-                reversals = int(np.sum(signs[1:] != signs[:-1])) if len(signs) > 1 else 0
+                xs_ = np.convolve(np.array([m[1] for m in motion]), np.ones(3) / 3, mode="valid")
+                # Count real strokes: direction changes after moving at least WAVE_STROKE.
+                reversals, direction, ext = 0, 0, xs_[0]
+                for x in xs_[1:]:
+                    if direction >= 0 and x <= ext - WAVE_STROKE:
+                        reversals += direction == 1
+                        direction, ext = -1, x
+                    elif direction <= 0 and x >= ext + WAVE_STROKE:
+                        reversals += direction == -1
+                        direction, ext = 1, x
+                    elif (direction == 1 and x > ext) or (direction == -1 and x < ext):
+                        ext = x
                 swing = float(xs_.max() - xs_.min())
                 wave_score = min(reversals / WAVE_MIN_REVERSALS, swing / WAVE_MIN_SWING)
                 if (reversals >= WAVE_MIN_REVERSALS and swing >= WAVE_MIN_SWING
@@ -445,7 +466,8 @@ class Rig:
                     motion.clear()
                     with self.lock:
                         self.wave_seq += 1
-                    print("Wave detected!", flush=True)
+                    print(f"Wave detected! reversals={reversals} swing={swing:.2f} "
+                          f"blob={wave_area:.3f} frames={len(xs_) + 2}", flush=True)
             with self.lock:
                 self.state["wave_score"] = wave_score
                 self.state["wave"] = t_arr - last_wave < 1.5
