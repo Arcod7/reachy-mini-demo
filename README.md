@@ -43,7 +43,7 @@ Personality on top of the tracking (disable all of it with `--no-reactions`):
   waist turns onto the head at 3.5x speed, so it has arrived before the gesture ends;
   A real hand detector runs on the robot (MediaPipe palm + 21 hand landmarks, OpenCV Zoo ONNX models
   in `models/`, fetched by `scripts/get_models.sh`): the hand must have index, middle, ring and pinky
-  extended for ~0.5 s, 6 s cooldown. The live view outlines the hand and its landmarks. It costs about
+  extended for ~0.5 s, 6 s cooldown, and only when a face is within about 3 m (otherwise the detector does no work at all). The live view outlines the hand and its landmarks. It costs about
   0.2 s of one core per check on the Pi; constants at the top of `src/face_centering.py`;
 - when the person leaves (2 s) the ears droop (ears only), then it looks around slowly for ~11 s
   (+/-45 deg, the waist follows the head); with nobody around it twitches an antenna now and then.

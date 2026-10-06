@@ -76,6 +76,7 @@ WAVE_MAX_HEAD_SPEED = 5.0  # deg/s; the camera must be still or the whole image 
 HAND_PERIOD_S = 0.2  # pause between hand checks; one check takes ~0.2 s on the Pi
 HAND_FRAMES = 2  # consecutive detections with an open hand (~0.5 s hold)
 HAND_COOLDOWN_S = 6.0
+HAND_MIN_FACE_FRAC = 0.025  # look for a hand only when a face is at least this wide (fraction of the frame width: about 3 m)
 HAND_CROP_FACES = 6.0  # square crop side, in face widths, centred a bit below the face
 TOLERANCE = 0.01  # target accuracy (normalised image units; 1 = half the image)
 
@@ -509,6 +510,9 @@ class Rig:
                 continue
             last_t, frame, (bx, by, bw, bh) = latest[0], latest[1], latest[2]
             h, w = frame.shape[:2]
+            if bw < HAND_MIN_FACE_FRAC * w:  # nobody close enough: no work at all
+                open_frames = 0
+                continue
             side = int(min(h, max(300.0, HAND_CROP_FACES * bw)))
             x0 = int(min(max(bx + bw / 2 - side / 2, 0), w - side))
             y0 = int(min(max(by + bh / 2 + 0.5 * bh - side / 2, 0), h - side))
