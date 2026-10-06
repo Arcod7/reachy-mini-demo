@@ -34,6 +34,7 @@ import collections
 import json
 import math
 import os
+import signal
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -71,6 +72,7 @@ LOST_RECENTRE_S = 6.0  # then, after this long, look straight ahead
 TOLERANCE = 0.01  # target accuracy (normalised image units; 1 = half the image)
 
 lock = threading.Lock()
+stop_detector = threading.Event()  # set on shutdown so the camera thread exits first
 latest_jpeg: bytes | None = None
 detection: dict = {"seq": 0}  # newest detection (t_arr, u, v, ...)
 det_log: list | None = None  # filled during --calibrate
@@ -214,7 +216,7 @@ def detector_loop(mini: ReachyMini, width: int, height: int) -> None:
     size = (DETECT_WIDTH, int(round(height * scale)))
     prev: tuple[float, float] | None = None
     seq, n, fps_t, fps_n = 0, 0, time.monotonic(), 0
-    while True:
+    while not stop_detector.is_set():
         frame = mini.media.get_frame()
         t_arr = time.monotonic()
         if frame is None:
@@ -319,13 +321,38 @@ def calibrate(mini: ReachyMini, hist: PoseHistory) -> None:
     mini.goto_target(create_head_pose(), body_yaw=None, duration=1.5)
 
 
+def _raise_interrupt(signum, frame) -> None:
+    raise KeyboardInterrupt  # SIGTERM (systemctl stop, shutdown) takes the Ctrl+C path
+
+
+def park(mini: ReachyMini) -> None:
+    """Clean stop: fold into the sleep pose, then release the motors."""
+    # A second signal while parking must not cut the move short.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    stop_detector.set()
+    time.sleep(0.3)  # let the camera thread finish its current frame
+    print("Stopping: going to the sleep pose...", flush=True)
+    try:
+        mini.goto_sleep()
+    except Exception as exc:  # daemon already gone, etc.: still release the motors
+        print(f"Could not reach the sleep pose: {exc}", flush=True)
+    try:
+        mini.disable_motors()
+    except Exception as exc:
+        print(f"Could not release the motors: {exc}", flush=True)
+    print("Stopped.", flush=True)
+
+
 def main(do_calibrate: bool) -> None:
+    signal.signal(signal.SIGTERM, _raise_interrupt)
     threading.Thread(
         target=ThreadingHTTPServer(("0.0.0.0", PORT), Viewer).serve_forever, daemon=True
     ).start()
 
     with ReachyMini() as mini:
         mini.stop_head_tracking()  # make sure the daemon's own tracker isn't steering
+        mini.enable_motors()  # motors are off after every boot
         mini.wake_up()
         mini.goto_target(antennas=INIT_ANTENNAS_JOINT_POSITIONS, body_yaw=None, duration=0.5)
         width, height = mini.media.camera.resolution
@@ -442,6 +469,8 @@ def main(do_calibrate: bool) -> None:
                 time.sleep(max(0.0, next_tick - time.monotonic()))
         except KeyboardInterrupt:
             pass
+        finally:
+            park(mini)
 
 
 if __name__ == "__main__":
