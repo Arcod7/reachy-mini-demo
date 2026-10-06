@@ -58,7 +58,7 @@ YAW_LIMIT = math.radians(75)  # head yaw in the world frame (also kept within HE
 BODY_LIMIT = math.radians(100)
 HEAD_BODY_DELTA = math.radians(35)  # head yaw relative to the waist (the SDK allows 65)
 SHRINK_START = math.radians(15)  # beyond this turn from the waist, pitch/roll room shrinks (down to 50%)
-BODY_FOLLOW_DELTA = math.radians(10)  # the waist stays put while the head is within this of it, else it follows
+BODY_FOLLOW_DELTA = math.radians(30)  # the waist stays put while the head is within this of it (the head can go 35), else it follows
 BODY_FAST = 3.5  # waist speed factor right after boost (the open-hand reaction)
 BODY_OMEGA = 1.5  # waist spring (rad/s): slow and gentle
 BODY_MAX_SPEED = math.radians(35)
@@ -602,7 +602,7 @@ class Rig:
                 if now - last_seen > 1.0:  # face (re)appeared: drop stale filter state
                     f_yaw.reset()
                     f_pitch.reset()
-                    last_seen = now
+                last_seen = now
                 # Face direction = head pose when the frame was taken + the angle
                 # that brings the eye midpoint to the image centre.
                 _, f_p, f_y = euler(hist.at(det["t_arr"] - latency))
@@ -632,6 +632,7 @@ class Rig:
             else:
                 target_yaw, target_pitch, target_roll = sg["yaw"], sg["pitch"], sg["roll"]
                 omega, tau, vmax = sg["omega"], sg["tau"], sg["vmax"]
+            wanted_yaw = target_yaw  # where the head wants to look, before the safety envelope
             target_yaw, target_pitch, target_roll = limit_pose(target_yaw, target_pitch, target_roll, m_body)
 
             # Stage 1: first-order smoothing of the goal (removes steps -> continuous
@@ -656,12 +657,15 @@ class Rig:
             a_ant = 1.0 - math.exp(-h / ANTENNA_TAU)
             ant = [a + a_ant * (g - a) for a, g in zip(ant, ant_goal)]
 
-            # Waist: it follows the head. It stays still while the head is within BODY_FOLLOW_DELTA
-            # of it (and never drifts back to the front); after body_boost() it turns onto the head
-            # quickly and tightly. Slow spring on the measured waist angle.
+            # Waist: it moves only (1) after body_boost() (open hand, search): it turns onto the head
+            # quickly and tightly, or (2) when the head can really not follow the person any more
+            # (the head's target is more than BODY_FOLLOW_DELTA from the waist: it turns exactly as far
+            # as needed). Otherwise it stays put, and it never drifts back to the front by itself.
+            # Slow spring on the measured waist angle.
             reach = 0.0 if body_fast else BODY_FOLLOW_DELTA
             body_speed = BODY_FAST if body_fast else 1.0
-            body_target = float(np.clip(m_body, m_yaw - reach, m_yaw + reach))
+            body_target = float(np.clip(m_body, wanted_yaw - reach, wanted_yaw + reach))
+            body_target = float(np.clip(body_target, m_yaw - BODY_FOLLOW_DELTA, m_yaw + BODY_FOLLOW_DELTA))  # never run far ahead of the head
             gs_body += (1.0 - math.exp(-h / 0.3)) * (body_target - gs_body)  # soft start
             w_b = BODY_OMEGA * body_speed
             acc = w_b * w_b * (gs_body - m_body) - 2.0 * w_b * vbody

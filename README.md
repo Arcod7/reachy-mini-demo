@@ -103,10 +103,12 @@ scripts/install.sh                                                              
 
 ## Waist
 
-One rule: the waist follows the head. It stays still while the head is within 10 deg of it, otherwise it
-turns just enough to keep up, and it never drifts back to the front by itself (when nobody is around the
-head goes back to the front and the waist follows). `rig.body_boost()` makes it turn onto the head quickly
-and tightly for a moment (open-hand reaction, search). Constants: `BODY_FOLLOW_DELTA`, `BODY_FAST`.
+The waist moves only when it has to: during the search, on the open-hand reaction (`rig.body_boost()`: it
+turns onto the head quickly and tightly for a moment), or when the head can really not follow the person
+any more (more than 30 deg from the waist; the head itself can go 35). Otherwise it stays put and never
+drifts back to the front by itself; the head does the following. When nobody is around the head goes back
+to the front and the waist follows only once it is more than 30 deg away. Constants: `BODY_FOLLOW_DELTA`,
+`BODY_FAST`.
 
 ## Safety envelope
 
