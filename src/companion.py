@@ -33,32 +33,23 @@ import threading
 import time
 
 from reachy_mini import ReachyMini
-from reachy_mini.reachy_mini import INIT_ANTENNAS_JOINT_POSITIONS
 
 import lines
 from face_centering import PORT, Rig, park
+from gestures import Gestures
 from speech import Speaker
 
 R = math.radians
-FAST_SPEED = R(150)  # for quick gestures
-
-# The original's emotion choreography: (yaw, up, roll, seconds), angles in radians.
-# +yaw = robot's left, +up = looks up.
-EMOTIONS = {
-    "joy": [(0.0, 0.3, 0.1, 0.5), (0.2, 0.1, 0.2, 0.3), (-0.2, 0.1, -0.2, 0.3), (0.0, 0.0, 0.0, 0.5)],
-    "curiosity": [(-0.2, 0.2, 0.0, 0.8), (0.2, 0.2, 0.0, 0.8), (0.0, 0.0, 0.1, 0.5)],
-    "excitement": [(0.0, 0.4, 0.2, 0.2), (0.3, -0.1, 0.0, 0.2), (-0.3, -0.1, 0.0, 0.2), (0.0, 0.0, 0.0, 0.3)],
-    "thinking": [(-0.1, 0.1, -0.1, 1.0), (0.1, 0.1, -0.1, 1.0), (0.0, 0.0, 0.0, 0.5)],
-}
 
 # Simon Says moves, in the *user's* point of view: "left" is the user's left, i.e. the
 # robot turns to its right. (yaw deg, pitch deg; +pitch = down)
 SIMON_MOVES = {"left": (-35, 0), "right": (35, 0), "up": (0, -22), "down": (0, 18), "center": (0, 0)}
 
 
-class Companion:
+class Companion(Gestures):
     def __init__(self, mini: ReachyMini, rig: Rig, stop: threading.Event, profile: str) -> None:
-        self.mini, self.rig, self.stop = mini, rig, stop
+        super().__init__(rig, stop)
+        self.mini = mini
         self.speaker = Speaker(mini, rig, stop)
         self.profile = lines.PROFILES.get(profile, lines.PROFILES["friendly"])
         self.metrics = {"face_detections": 0, "modes_run": 0}
@@ -74,10 +65,6 @@ class Companion:
     def pick(self, category: str) -> str:
         return random.choice(self.profile["responses"].get(category, ["Hello!"]))
 
-    def wait(self, seconds: float) -> bool:
-        """Sleep; True if we should stop."""
-        return self.stop.wait(seconds)
-
     def face(self) -> dict | None:
         """Newest face, updating the 'emotion' (the original's face-size heuristic)."""
         f = self.rig.face()
@@ -91,50 +78,8 @@ class Companion:
                             else "neutral" if a > 0.0098 else "curious")
         return f
 
-    def move(self, yaw=None, pitch=None, roll=None, seconds: float = 1.0, wait: bool = True) -> None:
-        """Smooth scripted head move (degrees); quick moves get a stiffer spring."""
-        omega = min(max(4.5 / seconds, 2.0), 14.0)
-        self.rig.look_deg(yaw, pitch, roll, omega=omega, tau=min(0.25, seconds / 4), vmax=FAST_SPEED)
-        if wait:
-            self.rig.wait_settled(timeout=seconds * 2 + 1.0, stop=self.stop)
-
-    def look_forward(self, seconds: float = 1.0) -> None:
-        self.move(0, 0, 0, seconds)
-
     def track(self) -> None:
         self.rig.set_tracking(True)
-
-    def emotion_animation(self, name: str) -> None:
-        """The original's choreographed emotions, with the antennas joining in."""
-        for yaw, up, roll, seconds in EMOTIONS[name]:
-            if self.stop.is_set():
-                return
-            self.flap(seconds)
-            self.move(math.degrees(yaw), -math.degrees(up), math.degrees(roll), seconds)
-            self.wait(0.1)
-        self.rig.antennas()
-
-    def flap(self, seconds: float, amount: float = 0.45) -> None:
-        """Quick antenna flap (both open, then settle) in the background."""
-        def run() -> None:
-            left, right = INIT_ANTENNAS_JOINT_POSITIONS
-            self.rig.antennas(left=left - amount, right=right + amount)
-            time.sleep(max(0.15, seconds * 0.5))
-            self.rig.antennas()
-        threading.Thread(target=run, daemon=True).start()
-
-    def animate_excitement(self) -> None:
-        """The original's 'excitement' gesture: three quick head wiggles + antenna wiggle."""
-        for _ in range(3):
-            for yaw, pitch in ((0, 0), (20, -8), (-20, -8)):
-                if self.stop.is_set():
-                    return
-                self.flap(0.3, 0.4)
-                self.move(yaw, pitch, 0, 0.3)
-                self.wait(0.05)
-        self.look_forward(0.6)
-        self.rig.antennas()
-        print("🎭 Excitement animation completed!", flush=True)
 
     # ------------------------------------------------------------------ modes
 
