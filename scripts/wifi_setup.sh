@@ -6,13 +6,15 @@
 # 3. moves this laptop onto <ssid> too, then looks for the robot there
 #
 # Usage: ./wifi_setup.sh <ssid>     (prompts for the password)
+#        (setup hotspot password: REACHY_AP_PASSWORD, default "reachy-mini")
 set -euo pipefail
+[ -f "$(dirname "$0")/../.env" ] && { set -a; . "$(dirname "$0")/../.env"; set +a; }  # ROBOT_PASSWORD, REACHY_AP_PASSWORD
 
 ssid="${1:?usage: $0 <ssid>}"
 read -rsp "Password for '$ssid': " password; echo
 
 echo "==> Joining reachy-mini-ap..."
-nmcli con up reachy-mini-ap >/dev/null 2>&1 || nmcli dev wifi connect reachy-mini-ap password reachy-mini >/dev/null
+nmcli con up reachy-mini-ap >/dev/null 2>&1 || nmcli dev wifi connect reachy-mini-ap password "${REACHY_AP_PASSWORD:-reachy-mini}" >/dev/null
 # Always try to get the laptop back on '$ssid', even if a step fails.
 trap 'nmcli -t -f ACTIVE,SSID dev wifi list | grep -qx "yes:$ssid" || nmcli con up "$ssid" >/dev/null 2>&1 || true' EXIT
 for _ in $(seq 20); do curl -fs -m 2 http://10.42.0.1:8000/wifi/status >/dev/null && break; sleep 1; done

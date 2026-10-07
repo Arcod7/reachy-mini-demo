@@ -8,6 +8,7 @@
 #
 # Usage: scripts/shutdown.sh [--reboot]     (ROBOT=pollen@reachy-mini.local)
 set -euo pipefail
+[ -f "$(dirname "$0")/../.env" ] && { set -a; . "$(dirname "$0")/../.env"; set +a; }  # ROBOT_PASSWORD, REACHY_AP_PASSWORD
 
 ROBOT="${ROBOT:-pollen@reachy-mini.local}"
 action="-h now"
