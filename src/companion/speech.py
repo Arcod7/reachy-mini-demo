@@ -13,7 +13,7 @@ import wave
 from companion import lines
 from reachy_mini.reachy_mini import INIT_ANTENNAS_JOINT_POSITIONS
 
-SPEECH_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "speech")
+SPEECH_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "speech")  # <repo>/speech
 
 # (amplitude rad, frequency Hz) of the antenna flutter while talking.
 FLUTTER = {"excited": (0.35, 3.0), "happy": (0.25, 2.2), "curious": (0.2, 1.6),

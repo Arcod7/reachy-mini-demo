@@ -19,4 +19,4 @@ trap restore EXIT
 echo "==> Stopping the face-centering service (it parks the head)"
 ssh_ "$ROBOT" "sudo systemctl stop reachy-look.service"
 echo "==> Companion (Ctrl+C to stop)  "
-ssh_ -t "$ROBOT" "cd $DEST && /venvs/apps_venv/bin/python -u -m companion $*" 2>&1 | grep --line-buffered -v -i "onnxruntime"
+ssh_ -t "$ROBOT" "cd $DEST/src && /venvs/apps_venv/bin/python -u -m companion $*" 2>&1 | grep --line-buffered -v -i "onnxruntime"

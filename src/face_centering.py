@@ -489,7 +489,7 @@ class Rig:
         import subprocess
         import sys
         here = os.path.dirname(os.path.abspath(__file__))
-        model_dir = os.path.join(here, "models")
+        model_dir = os.path.join(os.path.dirname(here), "models")  # <repo>/models (not in git, see install.sh)
         if not hand_detector.available(model_dir):
             print(f"Hand models not found in {model_dir}: open-hand trigger disabled "
                   f"(run scripts/get_models.sh, then scripts/install.sh).", flush=True)
