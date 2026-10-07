@@ -19,9 +19,9 @@ Not changed on purpose: the "emotion detector" is still the original's face-size
 heuristic (closer face = more excited), not facial-expression recognition, and
 "security mode" reacts to any face, not to motion.
 
-  python companion.py            one pass through all modes
-  python companion.py --loop     repeat until stopped
-  python companion.py --only simon_says   one mode (greeting, face_tracking,
+  python -m companion            one pass through all modes
+  python -m companion --loop     repeat until stopped
+  python -m companion --only simon_says   one mode (greeting, face_tracking,
                                  simon_says, conversation, security, farewell)
 """
 
@@ -34,10 +34,10 @@ import time
 
 from reachy_mini import ReachyMini
 
-import lines
+from companion import lines
+from companion.speech import Speaker
 from face_centering import Rig, park
 from gestures import Gestures
-from speech import Speaker
 
 R = math.radians
 

@@ -2,7 +2,7 @@
 """Render every line the companion can say to speech/<key>.wav.
 
 The robot has no speech engine, so this runs on the laptop; scripts/install.sh then
-copies speech/ to the robot. Re-run it after changing src/lines.py or the voice.
+copies speech/ to the robot. Re-run it after changing src/companion/lines.py or the voice.
 
 Engines:
   kokoro (default)  Kokoro-82M, natural voice. Needs `pip install kokoro-onnx soundfile`
@@ -24,7 +24,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-import lines  # noqa: E402
+from companion import lines  # noqa: E402
 
 SAMPLE_TEXT = "Hi! Great to see you! I'm Reachy, and I'm excited to meet you!"
 

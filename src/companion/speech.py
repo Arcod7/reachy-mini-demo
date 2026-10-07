@@ -1,4 +1,4 @@
-"""Plays the pre-rendered speech lines (see lines.py / scripts/make_speech.py).
+"""Plays the pre-rendered speech lines (see companion/lines.py / scripts/make_speech.py).
 
 While a line plays the head wobbles with the audio (the SDK's audio-reactive
 wobbler) and the antennas flutter, more or less depending on the emotion.
@@ -10,10 +10,10 @@ import threading
 import time
 import wave
 
-import lines
+from companion import lines
 from reachy_mini.reachy_mini import INIT_ANTENNAS_JOINT_POSITIONS
 
-SPEECH_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech")
+SPEECH_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "speech")
 
 # (amplitude rad, frequency Hz) of the antenna flutter while talking.
 FLUTTER = {"excited": (0.35, 3.0), "happy": (0.25, 2.2), "curious": (0.2, 1.6),
