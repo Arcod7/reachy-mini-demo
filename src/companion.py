@@ -35,7 +35,7 @@ import time
 from reachy_mini import ReachyMini
 
 import lines
-from face_centering import PORT, Rig, park
+from face_centering import Rig, park
 from gestures import Gestures
 from speech import Speaker
 
@@ -205,7 +205,6 @@ class Companion(Gestures):
     def run(self, only: str | None = None) -> None:
         print("🎭 Reachy Mini AI Companion Starting!")
         print("=" * 60)
-        print(f"   Live view: http://reachy-mini.local:{PORT}", flush=True)
         if only in (None, "greeting"):
             self.intro()
         for name in self.MODES:

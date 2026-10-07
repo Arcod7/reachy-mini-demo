@@ -42,6 +42,7 @@ from reachy_mini.utils.rotation import Rotation as R
 from reachy_mini.vision.face_detector import FaceDetector
 
 PORT = 8080
+VIEW = os.environ.get("REACHY_VIEW") == "1"  # debug web view; off in production (no port, no drawing/encoding)
 VIEW_EVERY = 3  # annotate + encode one frame in N for the web view
 DETECT_WIDTH = 384  # detector input width (px); eyes are averaged to cut noise
 CONTROL_HZ = 50.0
@@ -239,12 +240,12 @@ class Rig:
     # ------------------------------------------------------------------ public API
 
     def start(self, controller: bool = True, hand: bool = True) -> None:
-        """Start the web view and detector; `controller=False` for calibration."""
-        handler = self._make_handler()
-        server = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
-        server.daemon_threads = True
-        self._server = server
-        self._spawn(server.serve_forever)
+        """Start the detector (and the web view if REACHY_VIEW=1); `controller=False` for calibration."""
+        if VIEW:
+            server = ThreadingHTTPServer(("0.0.0.0", self.port), self._make_handler())
+            server.daemon_threads = True
+            self._server = server
+            self._spawn(server.serve_forever)
         self._spawn(self._detector_loop)
         if controller:
             self._spawn(self._control_loop)
@@ -452,7 +453,7 @@ class Rig:
             else:
                 prev = None
 
-            if n % VIEW_EVERY == 0:
+            if VIEW and n % VIEW_EVERY == 0:
                 view = frame.copy()  # SDK frames are read-only
                 cx, cy = (width - 1) / 2, (height - 1) / 2
                 tw, th = TOLERANCE * cx, TOLERANCE * cy

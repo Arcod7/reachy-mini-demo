@@ -1,0 +1,16 @@
+[Unit]
+Description=Reachy Mini: switch Wi-Fi off 15 min after boot (hotspot/SSH window)
+After=NetworkManager.service
+# The daemon brings the hotspot up at start; the radio must be on by then.
+Before=reachy-mini-daemon.service
+
+[Service]
+Type=simple
+# The window length comes from `export WIFI_WINDOW_S=` in /home/pollen/.zshrc (0 disables); 900 s otherwise.
+
+# NetworkManager remembers "radio off" across reboots, so every boot starts by turning it back on.
+ExecStartPre=/usr/bin/nmcli radio wifi on
+ExecStart=/usr/local/sbin/reachy-wifi-window
+
+[Install]
+WantedBy=multi-user.target

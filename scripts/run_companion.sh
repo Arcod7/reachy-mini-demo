@@ -7,6 +7,7 @@
 # Usage: scripts/run_companion.sh [--loop] [--only MODE] [--profile friendly|professional]
 #        (ROBOT=pollen@reachy-mini.local; ROBOT_PASSWORD for sshpass)
 set -euo pipefail
+[ -f "$(dirname "$0")/../.env" ] && { set -a; . "$(dirname "$0")/../.env"; set +a; }  # ROBOT_PASSWORD, REACHY_AP_PASSWORD
 
 ROBOT="${ROBOT:-pollen@reachy-mini.local}"
 DEST=/home/pollen/reachy-mini-demo
@@ -17,5 +18,5 @@ trap restore EXIT
 
 echo "==> Stopping the face-centering service (it parks the head)"
 ssh_ "$ROBOT" "sudo systemctl stop reachy-look.service"
-echo "==> Companion (Ctrl+C to stop)  Live view: http://${ROBOT#*@}:8080"
+echo "==> Companion (Ctrl+C to stop)  "
 ssh_ -t "$ROBOT" "cd $DEST && /venvs/apps_venv/bin/python -u companion.py $*" 2>&1 | grep --line-buffered -v -i "onnxruntime"

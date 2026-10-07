@@ -30,7 +30,7 @@ your computer (the robot cannot join WPA-Enterprise networks; a phone hotspot wo
    `scripts/wifi_setup.sh <ssid>`
 2. Update the robot if needed: `curl -X POST http://reachy-mini.local:8000/update/start`
 3. Install and enable the service: `scripts/install.sh`
-   (SSH user `pollen`, default password `root`; set `ROBOT_PASSWORD` to skip prompts)
+   (SSH user `pollen`; copy `.env.example` to `.env` and set `ROBOT_PASSWORD` and `REACHY_AP_PASSWORD` so the scripts do not prompt)
 4. Optional, after moving the robot or changing the camera: calibrate. Sit still facing
    it, then on the robot `/venvs/apps_venv/bin/python ~/reachy-mini-demo/look_straight.py --calibrate`
    (stop the service first). Results go to `~/camera_calibration.json`.
@@ -49,7 +49,7 @@ Personality on top of the tracking (disable all of it with `--no-reactions`):
   (+/-45 deg, the waist follows the head); with nobody around it twitches an antenna now and then.
 Timings are constants at the top of `src/look_straight.py`; the gestures live in `src/gestures.py`.
 
-Live view and tracking state: <http://reachy-mini.local:8080> (camera with the centre
+Debug live view (off by default: no port opened, no extra CPU): set `REACHY_VIEW=1` for the service or run, then open <http://reachy-mini.local:8080> (camera with the centre
 cross and a ±0.01 target box, face detected, error, head command, CENTRED badge).
 
 ## Start, stop, shutdown

@@ -34,7 +34,7 @@ import time
 from reachy_mini import ReachyMini
 from reachy_mini.reachy_mini import INIT_ANTENNAS_JOINT_POSITIONS
 
-from face_centering import PORT, Rig, calibrate, park
+from face_centering import Rig, calibrate, park
 from gestures import Gestures
 
 PRESENT_S = 0.5  # a face must stay this long before we react
@@ -125,8 +125,7 @@ def main(do_calibrate: bool, reactions: bool) -> None:
             rig.set_tracking(True)
             cal = rig.cal
             print(f"Looking people in the eyes (latency {cal['latency_s'] * 1000:.0f} ms, "
-                  f"{cal['px_per_deg_yaw']:+.1f}/{cal['px_per_deg_pitch']:+.1f} px/deg). "
-                  f"View + state: http://reachy-mini.local:{PORT}", flush=True)
+                  f"{cal['px_per_deg_yaw']:+.1f}/{cal['px_per_deg_pitch']:+.1f} px/deg).", flush=True)
             if reactions:
                 presence_loop(rig)
             while True:
