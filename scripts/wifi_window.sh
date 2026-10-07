@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs ON the robot (systemd: reachy-wifi-window.service). Only applies to the robot's own hotspot: the
-# radio is switched off WIFI_WINDOW_S seconds after boot, or that long after the last SSH session / hotspot
-# client, whichever is later. On a normal Wi-Fi network (client mode) it never switches off.
-# Power-cycle the robot to open a new window. Bluetooth/USB recovery still work with the radio off.
+# Wi-Fi radio and Bluetooth (Pollen's reset/provisioning service) are switched off WIFI_WINDOW_S seconds
+# after boot, or that long after the last SSH session / hotspot client, whichever is later.
+# On a normal Wi-Fi network (client mode) nothing is switched off.
+# Power-cycle the robot to open a new window (the power button and USB still work with both radios off).
 set -u
 
 # systemd never reads ~/.zshrc, so read the `export WIFI_WINDOW_S=...` line from it (0 = never switch off)
@@ -38,5 +39,7 @@ while :; do
     break
   fi
 done
-echo "Hotspot window over: switching the radio off"
+echo "Hotspot window over: switching Wi-Fi and Bluetooth off"
 nmcli radio wifi off
+systemctl stop reachy-mini-bluetooth.service
+/usr/sbin/rfkill block bluetooth  # the Bluetooth service unblocks it again at every boot

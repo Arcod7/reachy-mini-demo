@@ -17,6 +17,9 @@ scp_() { if [ -n "${ROBOT_PASSWORD:-}" ]; then sshpass -p "$ROBOT_PASSWORD" scp 
 echo "==> Copying files to $ROBOT"
 ssh_ "$ROBOT" "mkdir -p $DEST"
 scp_ "$HERE"/src/*.py "$ROBOT:$DEST/"
+# the companion is a package (python -m companion); drop its old flat files on the robot first
+ssh_ "$ROBOT" "rm -rf $DEST/companion $DEST/companion.py $DEST/lines.py $DEST/speech.py"
+tar -C "$HERE/src" --exclude=__pycache__ -cf - companion | ssh_ "$ROBOT" "tar -C $DEST -xf -"
 [ -d "$HERE/models" ] && { ssh_ "$ROBOT" "mkdir -p $DEST/models"; scp_ "$HERE"/models/*.onnx "$ROBOT:$DEST/models/"; }
 [ -d "$HERE/speech" ] && { ssh_ "$ROBOT" "mkdir -p $DEST/speech"; scp_ "$HERE"/speech/* "$ROBOT:$DEST/speech/"; }
 scp_ "$HERE/systemd/reachy-look.service" "$HERE/systemd/reachy-wifi-window.service" "$HERE/scripts/wifi_window.sh" "$ROBOT:/tmp/"
@@ -34,5 +37,5 @@ ssh_ "$ROBOT" "sudo systemctl stop reachy-look.service 2>/dev/null || true
   sudo systemctl restart reachy-look.service
   sleep 5; systemctl is-active reachy-look.service"
 
-echo "Done. It now starts at every boot. Wi-Fi switches itself off 15 min after boot once nobody is connected"
+echo "Done. It now starts at every boot. In hotspot mode, Wi-Fi and Bluetooth switch off 15 min after boot / the last connection"
 echo "(power-cycle the robot to open a new window; change WIFI_WINDOW_S in ~/.zshrc on the robot, 0 disables)."

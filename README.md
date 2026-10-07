@@ -52,6 +52,15 @@ Timings are constants at the top of `src/look_straight.py`; the gestures live in
 Debug live view (off by default: no port opened, no extra CPU): set `REACHY_VIEW=1` for the service or run, then open <http://reachy-mini.local:8080> (camera with the centre
 cross and a ±0.01 target box, face detected, error, head command, CENTRED badge).
 
+## Hotspot window (Wi-Fi and Bluetooth off)
+
+When the robot runs its own `reachy-mini-ap` hotspot (no known network in range), its Wi-Fi **and
+Bluetooth** switch off `WIFI_WINDOW_S` seconds (default 900) after boot, or after the last SSH session
+or hotspot client, whichever is later. On a normal network nothing is switched off. Power-cycle the
+robot to open a new window. Set `export WIFI_WINDOW_S=...` in `~/.zshrc` on the robot (0 disables).
+The hotspot password is changed on the robot with `sudo nmcli con modify Hotspot wifi-sec.psk ...`
+(put it in `.env` as `REACHY_AP_PASSWORD`).
+
 ## Start, stop, shutdown
 
 | | |
