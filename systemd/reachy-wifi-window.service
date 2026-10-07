@@ -9,7 +9,8 @@ Type=simple
 # WIFI_WINDOW_S (default 900) comes from `export WIFI_WINDOW_S=` in /home/pollen/.zshrc (0 disables).
 
 # NetworkManager remembers "radio off" across reboots, so every boot starts by turning it back on.
-ExecStartPre=/usr/bin/nmcli radio wifi on
+# "-": if nmcli is not ready, still run (a failed ExecStartPre would leave the radio off).
+ExecStartPre=-/usr/bin/nmcli radio wifi on
 ExecStart=/usr/local/sbin/reachy-wifi-window
 
 [Install]

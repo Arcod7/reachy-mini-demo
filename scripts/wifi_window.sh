@@ -7,7 +7,7 @@
 set -u
 
 # systemd never reads ~/.zshrc, so read the `export WIFI_WINDOW_S=...` line from it (0 = never switch off)
-WINDOW="$(sed -n 's/^export WIFI_WINDOW_S=\([0-9]*\).*/\1/p' /home/pollen/.zshrc 2>/dev/null | tail -1)"
+WINDOW="$(sed -n "s/^export WIFI_WINDOW_S=[\"']\{0,1\}\([0-9]*\).*/\1/p" /home/pollen/.zshrc 2>/dev/null | tail -1)"
 WINDOW="${WINDOW:-${WIFI_WINDOW_S:-900}}"
 [ "$WINDOW" = 0 ] && { echo "WIFI_WINDOW_S=0: Wi-Fi stays on"; exit 0; }
 IFACE="$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}')"
