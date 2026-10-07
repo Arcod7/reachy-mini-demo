@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
-# Runs ON the robot (systemd: reachy-wifi-window.service). Wi-Fi is on at boot (the robot's hotspot if
-# it finds no known network); WIFI_WINDOW_S seconds later it is switched off, once nobody is connected.
+# Runs ON the robot (systemd: reachy-wifi-window.service). Only applies to the robot's own hotspot: the
+# radio is switched off WIFI_WINDOW_S seconds after boot, once the hotspot has been idle for WIFI_GRACE_S
+# (no SSH session, no client attached). On a normal Wi-Fi network (client mode) it never switches off.
 # Power-cycle the robot to open a new window. Bluetooth/USB recovery still work with the radio off.
 set -u
 
 # systemd never reads ~/.zshrc, so read the `export WIFI_WINDOW_S=...` line from it (0 = never switch off)
 WINDOW="$(sed -n 's/^export WIFI_WINDOW_S=\([0-9]*\).*/\1/p' /home/pollen/.zshrc 2>/dev/null | tail -1)"
 WINDOW="${WINDOW:-${WIFI_WINDOW_S:-900}}"
+GRACE="${WIFI_GRACE_S:-600}"
 [ "$WINDOW" = 0 ] && { echo "WIFI_WINDOW_S=0: Wi-Fi stays on"; exit 0; }
 IFACE="$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}')"
+
+now() { date +%s; }
+
+hotspot_mode() {
+  local name
+  name="$(nmcli -t -f NAME,TYPE con show --active | awk -F: '$2=="802-11-wireless"{print $1; exit}')"
+  [ -n "$name" ] && [ "$(nmcli -g 802-11-wireless.mode con show "$name" 2>/dev/null)" = "ap" ]
+}
 
 busy() {
   # an SSH session, or a client attached to our hotspot
@@ -17,7 +27,17 @@ busy() {
   return 1
 }
 
-sleep "$WINDOW"
-while busy; do sleep 30; done
-echo "Wi-Fi window over: switching the radio off"
+deadline=$(( $(now) + WINDOW ))
+while :; do
+  sleep 30
+  # not in hotspot mode, or in use: push the deadline back by the grace period
+  if ! hotspot_mode || busy; then
+    t=$(( $(now) + GRACE ))
+    [ "$t" -gt "$deadline" ] && deadline=$t
+  fi
+  if [ "$(now)" -ge "$deadline" ] && hotspot_mode && ! busy; then
+    break
+  fi
+done
+echo "Hotspot window over: switching the radio off"
 nmcli radio wifi off
