@@ -1,12 +1,12 @@
 [Unit]
-Description=Reachy Mini: switch the hotspot Wi-Fi off 15 min after boot once idle (never on a normal network)
+Description=Reachy Mini: switch the hotspot Wi-Fi off 15 min after boot or after the last connection (never on a normal network)
 After=NetworkManager.service
 # The daemon brings the hotspot up at start; the radio must be on by then.
 Before=reachy-mini-daemon.service
 
 [Service]
 Type=simple
-# WIFI_WINDOW_S (default 900) comes from `export WIFI_WINDOW_S=` in /home/pollen/.zshrc (0 disables); WIFI_GRACE_S (600) is the idle time after the last connection.
+# WIFI_WINDOW_S (default 900) comes from `export WIFI_WINDOW_S=` in /home/pollen/.zshrc (0 disables).
 
 # NetworkManager remembers "radio off" across reboots, so every boot starts by turning it back on.
 ExecStartPre=/usr/bin/nmcli radio wifi on
